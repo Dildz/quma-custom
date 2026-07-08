@@ -12,8 +12,10 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates git \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/target/release/quma /usr/local/bin/quma
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # spt_dir (mods + quartermaster.toml/.db) and docker.sock come in as mounts;
 # runtime user/uid is set by compose (1000:1000, group_add docker gid).
+# Entrypoint self-bootstraps (setup) on first boot, then serves.
 EXPOSE 9190
-ENTRYPOINT ["quma"]
-CMD ["serve"]
+ENTRYPOINT ["docker-entrypoint.sh"]
