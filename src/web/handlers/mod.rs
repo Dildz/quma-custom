@@ -9,7 +9,6 @@ pub mod fika_settings;
 pub mod give_items;
 pub mod join;
 pub mod logs;
-pub mod metrics;
 pub mod mods;
 pub mod modsync;
 pub mod notes;

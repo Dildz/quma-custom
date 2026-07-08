@@ -69,30 +69,6 @@ fn default_tls_enabled() -> bool {
     true
 }
 
-fn default_proxy_enabled() -> bool {
-    true
-}
-
-fn default_proxy_rewrite_source_port() -> u16 {
-    6969
-}
-
-fn default_proxy_rewrite_target_port() -> Option<u16> {
-    None
-}
-
-fn default_proxy_rewrite_http_paths() -> Vec<String> {
-    vec![
-        "/launcher/server/connect".to_string(),
-        "/client/game/config".to_string(),
-        "/client/game/mode".to_string(),
-    ]
-}
-
-fn default_proxy_rewrite_direct_paths() -> Vec<String> {
-    vec!["/client/notifier/channel/create".to_string()]
-}
-
 fn default_snapshots_enabled() -> bool {
     true
 }
@@ -1131,23 +1107,6 @@ pub struct Config {
     #[serde(default)]
     pub tls_key: Option<PathBuf>,
 
-    #[serde(default = "default_proxy_enabled")]
-    pub proxy_enabled: bool,
-
-    /// Deprecated: the proxy now auto-detects the origin from response bodies.
-    /// Retained so existing TOML files with this field still parse.
-    #[serde(default = "default_proxy_rewrite_source_port")]
-    pub proxy_rewrite_source_port: u16,
-
-    #[serde(default = "default_proxy_rewrite_target_port")]
-    pub proxy_rewrite_target_port: Option<u16>,
-
-    #[serde(default = "default_proxy_rewrite_http_paths")]
-    pub proxy_rewrite_http_paths: Vec<String>,
-
-    #[serde(default = "default_proxy_rewrite_direct_paths")]
-    pub proxy_rewrite_direct_paths: Vec<String>,
-
     #[serde(default = "default_snapshots_enabled")]
     pub snapshots_enabled: bool,
 
@@ -1188,11 +1147,6 @@ impl Default for Config {
             tls_enabled: true,
             tls_cert: None,
             tls_key: None,
-            proxy_enabled: true,
-            proxy_rewrite_source_port: 6969,
-            proxy_rewrite_target_port: None,
-            proxy_rewrite_http_paths: default_proxy_rewrite_http_paths(),
-            proxy_rewrite_direct_paths: default_proxy_rewrite_direct_paths(),
             snapshots_enabled: true,
             leaderboard_min_raids: 5,
             external_url: None,
@@ -1384,7 +1338,6 @@ impl Config {
         env_override!(bool: self.tls_enabled, "QUMA_TLS_ENABLED");
         env_override!(opt_path: self.tls_cert, "QUMA_TLS_CERT");
         env_override!(opt_path: self.tls_key, "QUMA_TLS_KEY");
-        env_override!(bool: self.proxy_enabled, "QUMA_PROXY_ENABLED");
         env_override!(bool: self.snapshots_enabled, "QUMA_SNAPSHOTS_ENABLED");
         env_override!(parse: self.leaderboard_min_raids, "QUMA_LEADERBOARD_MIN_RAIDS", u32);
         env_override!(bool: self.backup.auto_backup, "QUMA_AUTO_BACKUP");
@@ -2166,7 +2119,6 @@ enabled = false
     fn tls_config_defaults() {
         let config: Config = toml::from_str("").expect("empty config");
         assert!(config.tls_enabled);
-        assert!(config.proxy_enabled);
         assert_eq!(config.tls_cert, None);
         assert_eq!(config.tls_key, None);
     }
@@ -2177,13 +2129,11 @@ enabled = false
 tls_enabled = false
 tls_cert = "/etc/ssl/cert.pem"
 tls_key = "/etc/ssl/key.pem"
-proxy_enabled = false
 "#;
         let config: Config = toml::from_str(toml_str).expect("should parse");
         assert!(!config.tls_enabled);
         assert_eq!(config.tls_cert, Some(PathBuf::from("/etc/ssl/cert.pem")));
         assert_eq!(config.tls_key, Some(PathBuf::from("/etc/ssl/key.pem")));
-        assert!(!config.proxy_enabled);
     }
 
     #[test]
@@ -2193,7 +2143,6 @@ proxy_enabled = false
                 ("QUMA_TLS_ENABLED", Some("false")),
                 ("QUMA_TLS_CERT", Some("/env/cert.pem")),
                 ("QUMA_TLS_KEY", Some("/env/key.pem")),
-                ("QUMA_PROXY_ENABLED", Some("false")),
             ],
             || {
                 let mut config = Config::default();
@@ -2201,7 +2150,6 @@ proxy_enabled = false
                 assert!(!config.tls_enabled);
                 assert_eq!(config.tls_cert, Some(PathBuf::from("/env/cert.pem")));
                 assert_eq!(config.tls_key, Some(PathBuf::from("/env/key.pem")));
-                assert!(!config.proxy_enabled);
             },
         );
     }

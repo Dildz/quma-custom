@@ -23,9 +23,6 @@
             {% if user.can("server.logs") %}
             <a href="/quma/logs"{% if active == "logs" %} class="active"{% endif %}>Logs</a>
             {% endif %}
-            {% if user.can("server.metrics") %}
-            <a href="/quma/metrics"{% if active == "metrics" %} class="active"{% endif %}>Metrics</a>
-            {% endif %}
             {% if user.can("settings.manage") %}
             <a href="/quma/settings"{% if active == "settings" %} class="active"{% endif %}>Settings</a>
             {% endif %}

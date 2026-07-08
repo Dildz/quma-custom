@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 
 use crate::db::mods::InstalledMod;
 use crate::db::Database;
-use crate::headless_sync::{sync_client_files_to_headless, SyncOp};
+use crate::headless_sync::SyncOp;
 use crate::spt::mods::ExtractedFile;
 
 /// Derive a mod name from a URL by extracting the filename and stripping extensions.
@@ -67,63 +67,26 @@ pub fn is_excluded_from_headless(config: &crate::config::Config, forge_mod_id: i
         .unwrap_or(false)
 }
 
-/// Best-effort sync of client-side files to the headless install directory.
-/// No-op if headless is not configured or the mod is in an exclude_headless group.
+// ponytail: no-op. ModSync owns distribution of mod files to the headless (and
+// restarts it) — quma must never copy mod files there. These two stubs are kept
+// so the ~11 call sites in install/update/remove (incl. async crash-recovery
+// plumbing) compile unchanged; the call sites + the whole headless management
+// subsystem (converge/supervisor) are removed together in the monitor-only epic.
 fn maybe_sync_headless(
-    config: &crate::config::Config,
-    spt_dir: &Path,
-    db: &Database,
-    mod_db_id: i64,
-    op: SyncOp,
+    _config: &crate::config::Config,
+    _spt_dir: &Path,
+    _db: &Database,
+    _mod_db_id: i64,
+    _op: SyncOp,
 ) {
-    let install_dir = match config.headless.as_ref().map(|h| &h.install_dir) {
-        Some(dir) => dir,
-        None => return,
-    };
-
-    if let Some(forge_mod_id) = db
-        .get_mod(mod_db_id)
-        .ok()
-        .flatten()
-        .and_then(|m| m.forge_mod_id)
-    {
-        if is_excluded_from_headless(config, forge_mod_id) {
-            tracing::debug!(
-                forge_mod_id,
-                "headless sync: mod in exclude_headless group, skipping"
-            );
-            return;
-        }
-    }
-
-    let files: Vec<String> = match db.get_files_for_mod(mod_db_id) {
-        Ok(f) => f.into_iter().map(|f| f.file_path).collect(),
-        Err(e) => {
-            tracing::warn!(mod_db_id, err = %e, "headless sync: failed to read file list");
-            return;
-        }
-    };
-
-    if let Err(e) = sync_client_files_to_headless(spt_dir, install_dir, &files, op) {
-        tracing::warn!(mod_db_id, err = %e, "headless sync failed");
-    }
 }
 
-/// Sync with a pre-read file list. Used when the file list is already available
-/// or when the DB record is about to be deleted (remove paths).
 fn maybe_sync_headless_with_files(
-    config: &crate::config::Config,
-    spt_dir: &Path,
-    files: &[String],
-    op: SyncOp,
+    _config: &crate::config::Config,
+    _spt_dir: &Path,
+    _files: &[String],
+    _op: SyncOp,
 ) {
-    let install_dir = match config.headless.as_ref().map(|h| &h.install_dir) {
-        Some(dir) => dir,
-        None => return,
-    };
-    if let Err(e) = sync_client_files_to_headless(spt_dir, install_dir, files, op) {
-        tracing::warn!(err = %e, "headless sync failed");
-    }
 }
 
 fn record_extracted_files(db: &Database, mod_db_id: i64, files: &[ExtractedFile]) -> Result<()> {

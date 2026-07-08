@@ -15,7 +15,15 @@ use bollard::query_parameters::{
 use bollard::Docker;
 use futures_util::Stream;
 
-pub const SPT_SERVER_IMAGE: &str = "ghcr.io/zhliau/fika-spt-server-docker:latest";
+// Local setup: default to the Dildz SPT-Fika image. This is only used when
+// `quma setup` has to CREATE a container from scratch. On this box the SPT
+// server is compose-managed, so let setup DETECT and wrap the running container
+// instead of bootstrapping one (see LOCAL-SETUP.md).
+// ponytail: the create-path mount in cli/setup.rs is still /opt/server (zhliau
+// layout), which won't match this image's game-root mount — a from-scratch
+// bootstrap will produce a broken container. Wrap the existing compose
+// container; don't bootstrap. Fix the mount here only if you ever need bootstrap.
+pub const SPT_SERVER_IMAGE: &str = "ghcr.io/dildz/spt-fika-server:latest";
 pub const DEFAULT_CONTAINER_NAME: &str = "spt-server";
 pub const DEFAULT_SPT_PORT: u16 = 6969;
 

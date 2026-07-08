@@ -8,9 +8,6 @@ pub mod integrity_cache;
 pub mod invite;
 pub mod mod_zip_cache;
 pub mod nav;
-pub mod proxy;
-pub mod proxy_metrics;
-pub mod proxy_ws;
 pub mod raid_tracker;
 pub mod sse;
 pub mod state;
@@ -247,11 +244,6 @@ pub fn configure_app(
         .route(
             "/dashboard/players",
             web::get().to(handlers::dashboard::players_partial),
-        )
-        // Metrics partials
-        .route(
-            "/metrics/proxy",
-            web::get().to(handlers::metrics::proxy_metrics_partial),
         )
         // Mods integrity partial
         .route(
@@ -536,7 +528,6 @@ pub fn configure_app(
         )
         .route("/mods/{id}", web::get().to(handlers::mods::mod_detail))
         .route("/logs", web::get().to(handlers::logs::logs_page))
-        .route("/metrics", web::get().to(handlers::metrics::metrics_page))
         .route("/admin", web::get().to(handlers::admin::admin_page))
         .route(
             "/give-items",
@@ -809,7 +800,7 @@ pub fn configure_app(
 
     cfg.service(quma_scope);
 
-    // Root redirect and default proxy handler
+    // Root redirect
     cfg.route(
         "/",
         web::get().to(|| async {
@@ -818,7 +809,6 @@ pub fn configure_app(
                 .finish()
         }),
     );
-    cfg.default_service(web::to(proxy::proxy_handler));
 }
 
 pub async fn start_server(ctx: ServerContext) -> Result<()> {
@@ -894,13 +884,6 @@ pub async fn start_server(ctx: ServerContext) -> Result<()> {
     let tls_enabled = config.tls_enabled;
     let spt_dir_for_tls = spt_dir.clone();
 
-    let proxy_client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .timeout(std::time::Duration::from_secs(60))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .expect("failed to build proxy HTTP client");
-
     let mod_zip_cache = crate::web::mod_zip_cache::ModZipCache::new(
         spt_dir.clone(),
         db_arc.clone(),
@@ -965,8 +948,6 @@ pub async fn start_server(ctx: ServerContext) -> Result<()> {
         config_mgmt,
         server_transition: Arc::new(parking_lot::Mutex::new(None)),
         game_data,
-        proxy_metrics: crate::web::proxy_metrics::ProxyMetrics::new(),
-        proxy_client,
         mod_zip_cache,
         log_level_counts,
         fika_client,

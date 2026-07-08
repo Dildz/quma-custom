@@ -1446,7 +1446,9 @@ async fn create_client_container(
         }
     }
 
-    // Route through quma's HTTPS proxy
+    // ponytail: built-in proxy was removed; this still points quma-managed headless
+    // clients at web_port. Dormant here (we run zhliau's headless separately). If
+    // quma's own headless supervisor is ever enabled, repoint at server_host/server_port.
     let proxy_host = match config.web_bind.as_str() {
         "0.0.0.0" | "127.0.0.1" | "localhost" | "" => "host.containers.internal",
         other => other,

@@ -92,7 +92,6 @@ pub struct WebSettingsForm {
     tls_enabled: Option<String>,
     tls_cert: String,
     tls_key: String,
-    proxy_enabled: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -202,7 +201,6 @@ pub async fn save_web_settings(
     } else {
         Some(std::path::PathBuf::from(key))
     };
-    config.proxy_enabled = form.proxy_enabled.is_some();
 
     state.persist_config(&config)?;
 

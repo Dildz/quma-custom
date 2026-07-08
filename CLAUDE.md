@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Quartermaster (`quma`) is a Rust CLI + web UI tool for managing server-side mods on an SPT/Fika dedicated server. It installs, updates, and removes mods from [SPT Forge](https://forge.sp-tarkov.com), with a web dashboard for server hosts and connected players. Linux-only for v1; SPT server runs in a Podman container.
+Quartermaster (`quma`) is a Rust CLI + web UI tool for managing server-side mods on an SPT/Fika dedicated server. It installs, updates, and removes mods from [SPT Forge](https://forge.sp-tarkov.com), with a web dashboard for server hosts and connected players. Linux-only for v1; the SPT server runs in a container.
+
+> **Detached local fork.** This is a private, upstream-detached copy adapted for a Docker + compose stack running the `ghcr.io/dildz/spt-fika-server` image with Dildz/Corter ModSync (not NarcoNet). The container layer talks to the Docker Engine API via bollard and uses the Docker socket first, so "Podman" below reads as "Docker" here. See `LOCAL-SETUP.md` for how to run it against this box's stack without touching the live server.
 
 **Binary name**: `quma`
 
@@ -72,7 +74,7 @@ Single Rust binary — the CLI and actix-web server share the same codebase. The
 - **`src/ops.rs`** — Core mod operations: `install_mod_from_archive`, `update_mod_from_archive`, `remove_mod_by_id`. Both install and update extract to a `tempfile::tempdir()` staging directory before committing to the DB and moving files into place. Async updates use `apply_mod_update` with a `pending_updates` marker for crash recovery (`recover_pending_updates` runs on startup).
 - **`src/backup.rs`** — Mod backup/restore system: per-mod and full snapshots of mod files, profiles, and config. Used by CLI `backup`/`restore` commands and web backup handler.
 - **`src/health.rs`** — Health check system: server liveness, version verification, mod load verification, file integrity (SHA256).
-- **`src/container.rs`** — Podman container management for SPT server lifecycle via bollard. Default SPT server image: `ghcr.io/zhliau/fika-spt-server-docker:latest`. Default headless client image: `localhost/fika-headless:latest` (configurable via `headless.image` in config).
+- **`src/container.rs`** — Container management for SPT server lifecycle via bollard (Docker Engine API; tries `/var/run/docker.sock` first, falls back to the Podman rootless socket). Default SPT server image: `ghcr.io/dildz/spt-fika-server:latest` (local-fork default; used only when `setup` creates a container from scratch — on this box, wrap the compose-managed container instead). Default headless client image: `localhost/fika-headless:latest` (configurable via `headless.image` in config).
 - **`src/queue.rs`** — Change queue: mod operations are queued when SPT server is running, applied when stopped.
 - **`src/server_detect.rs`** — Server running detection (Podman inspect or HTTP ping fallback).
 - **`src/logging/`** — Structured logging with tracing. `mod.rs` has `LogBroadcast` (tokio broadcast + ring buffer), tracing subscriber setup, and per-layer target filtering. `compact.rs` is a custom compact console formatter. `writer.rs` is an async SQLite log writer for the log viewer. Supports console, file (with rotation), SQLite persistence, and web broadcast (SSE). Web log viewer caps DOM at 2000 entries with `trimOldEntries()` and disconnects SSE on hidden tabs.

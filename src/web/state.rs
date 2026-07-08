@@ -18,7 +18,6 @@ use crate::spt::game_data::GameData;
 use crate::svm::SvmManager;
 use crate::web::integrity_cache::IntegrityCache;
 use crate::web::mod_zip_cache::ModZipCache;
-use crate::web::proxy_metrics::ProxyMetrics;
 use crate::web::sse::ServerEvent;
 use crate::web::tasks::TaskTracker;
 use crate::web::update_cache::UpdateCache;
@@ -47,8 +46,6 @@ pub struct AppState {
     pub config_mgmt: ConfigManager,
     pub server_transition: Arc<Mutex<Option<String>>>,
     pub game_data: Arc<GameData>,
-    pub proxy_metrics: ProxyMetrics,
-    pub proxy_client: reqwest::Client,
     pub mod_zip_cache: ModZipCache,
     pub log_level_counts: LogLevelCounts,
     #[allow(dead_code)] // ponytail: used in later tasks
