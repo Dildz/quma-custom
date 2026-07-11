@@ -1,0 +1,102 @@
+name: Build & publish quma image
+
+# Builds the quma image (Dockerfile at repo root — Rust build -> slim runtime)
+# from source for amd64 AND arm64 on NATIVE runners (no QEMU) and publishes one
+# multi-arch tag to GHCR. Auth is the built-in GITHUB_TOKEN — no PAT.
+#
+# To publish: Actions tab -> this workflow -> "Run workflow" -> pick the branch
+# that has the Dockerfile (docker). The configurator's emitted compose pulls
+# ghcr.io/dildz/quma:latest, so this is how that image is (re)published.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to publish (e.g. latest, or a version like 0.2.0)"
+        required: true
+        default: "latest"
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: dildz/quma
+
+jobs:
+  # Build each arch on its own native runner, push by digest (no tag yet).
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+            arch: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm   # GitHub's native arm64 runner (free on public repos)
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build & push by digest (${{ matrix.arch }})
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Save digest
+        run: |
+          digest="${{ steps.build.outputs.digest }}"
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Stitch the two per-arch digests into one multi-arch tag.
+  merge:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Create & push manifest list
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create -t ${REGISTRY}/${IMAGE}:${{ inputs.tag }} \
+            $(for d in *; do printf '%s@sha256:%s ' "${REGISTRY}/${IMAGE}" "$d"; done)
+
+      - name: Show published manifest
+        run: docker buildx imagetools inspect "${REGISTRY}/${IMAGE}:${{ inputs.tag }}"
