@@ -32,18 +32,23 @@ struct DepsJson {
     libraries: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
-/// Required markers that identify a valid SPT 4.0+ installation directory.
+/// Required markers that identify a valid SPT 4.0+ server installation directory.
+///
+/// A dedicated SPT server (Linux especially) has no `SPT.Server.exe` (it ships
+/// `SPT.Server.Linux`/`.dll`) and no client-side `BepInEx/plugins`. So we key off
+/// the .NET server assembly manifest (`SPT.Server.deps.json`, platform-agnostic and
+/// what `read_spt_version` already parses), the server config, and the server mods dir.
 const REQUIRED_PATHS: &[&str] = &[
-    "SPT/SPT.Server.exe",
+    "SPT/SPT.Server.deps.json",
     "SPT/SPT_Data/configs/core.json",
     "SPT/user/mods",
-    "BepInEx/plugins",
 ];
 
-/// Validate that `path` contains the expected SPT directory structure.
+/// Validate that `path` contains the expected SPT server directory structure.
 ///
-/// Checks for the presence of SPT/SPT.Server.exe, the server config directory,
-/// the user mods directory, and BepInEx plugins directory.
+/// Checks for the presence of SPT/SPT.Server.deps.json, the server config
+/// directory, and the user mods directory. Client-only artifacts (SPT.Server.exe,
+/// BepInEx) are intentionally NOT required — a dedicated server has neither.
 pub fn validate_spt_dir(path: &Path) -> Result<()> {
     for entry in REQUIRED_PATHS {
         let full = path.join(entry);
@@ -205,7 +210,7 @@ mod tests {
     fn validate_rejects_empty_dir() {
         let tmp = TempDir::new().unwrap();
         let err = validate_spt_dir(tmp.path()).unwrap_err();
-        assert!(err.to_string().contains("missing SPT/SPT.Server.exe"));
+        assert!(err.to_string().contains("missing SPT/SPT.Server.deps.json"));
     }
 
     #[test]
