@@ -424,28 +424,15 @@ fn create_db_and_admin(data_dir: &Path, admin_password: &str) -> Result<Database
     Ok(db)
 }
 
-fn print_summary(config: &Config, data_dir: &Path, install_fika: bool, install_modsync: bool) {
+fn print_summary(config: &Config, data_dir: &Path) {
     println!("\n=== Setup Complete ===\n");
     println!("SPT directory: {}", data_dir.display());
     if let Some(ref container) = config.server_container {
         println!("Container: {container}");
     }
-    println!(
-        "Fika: {}",
-        if install_fika {
-            "installed"
-        } else {
-            "disabled"
-        }
-    );
-    println!(
-        "NarcoNet: {}",
-        if install_modsync {
-            "installed"
-        } else {
-            "skipped"
-        }
-    );
+    // Fika/ModSync are installed by the image from configurator selections, never by
+    // quma in this stack, so a "did quma install them" line is always false and
+    // misleading — omitted. quma still DETECTS them (see the unmanaged-mods scan).
     println!("Web UI: http://{}:{}", config.web_bind, config.web_port);
     println!("Admin user: admin");
     println!("\nNext steps:");
@@ -504,7 +491,7 @@ async fn bootstrap(mgr: &ContainerManager, p: ResolvedSetup, cli: &Cli) -> Resul
         .await?;
 
     // 11. Summary
-    print_summary(&config, &p.data_dir, p.install_fika, p.install_modsync);
+    print_summary(&config, &p.data_dir);
 
     Ok(())
 }
@@ -556,7 +543,7 @@ async fn wrap_existing(mgr: &ContainerManager, p: ResolvedSetup, cli: &Cli) -> R
         .await?;
 
     // 6. Summary
-    print_summary(&config, &p.data_dir, p.install_fika, p.install_modsync);
+    print_summary(&config, &p.data_dir);
 
     Ok(())
 }
