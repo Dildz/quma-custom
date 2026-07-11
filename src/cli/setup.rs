@@ -566,6 +566,17 @@ async fn detect_or_create_container(
     data_dir: &Path,
     container_name: &str,
 ) -> Result<String> {
+    // In a compose deployment the server's container name is always known
+    // (QUMA_SERVER_CONTAINER), and quma itself mounts the same data dir — which makes
+    // path-based detection ambiguous (it would match quma's own container too). So if
+    // the caller named a container and it already exists, wrap that one directly. This
+    // also frees the data dir from having to be an absolute host path. Path-based
+    // auto-detection stays as a fallback for native, non-compose use.
+    if !container_name.is_empty() && mgr.inspect(container_name).await.is_ok() {
+        println!("Using configured container: {}", container_name);
+        return Ok(container_name.to_string());
+    }
+
     let detected = mgr.detect_spt_containers(data_dir).await?;
 
     if detected.len() == 1 {
