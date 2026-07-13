@@ -21,31 +21,45 @@ use crate::ops::ModSource;
 
 /// A mod the Docker image installs, and the paths it owns in the game root.
 struct CoreMod {
-    /// Env suffix: `QUMA_MANAGE_{key}` gates adoption, `{key}_VERSION` supplies
-    /// the installed version.
+    /// `QUMA_MANAGE_{key}` gates adoption. Fika's three components share one key:
+    /// they are updated together by the image, so they are handed over together.
     key: &'static str,
     name: &'static str,
-    /// Forge mods get Forge update checks for free. `None` = GitHub-sourced.
+    /// Forge mods get Forge update checks for free. `None` = GitHub-sourced, and
+    /// `url_template` says where its releases live.
     forge_mod_id: Option<i64>,
-    /// Files and directories, relative to the game root.
+    /// Env var holding the version the image installed.
+    version_env: &'static str,
+    /// GitHub release URL for the installed version, `{v}` = version. Storing it
+    /// as the mod's `source_url` is what makes GitHub update checks work.
+    url_template: Option<&'static str>,
+    /// Env var that overrides the URL, matching the image's own override.
+    url_env: Option<&'static str>,
+    /// Files and directories, relative to the game root. Missing ones are skipped,
+    /// which is how the component permutations (ARM without a headless, a stack
+    /// without ModSync) fall out for free.
     paths: &'static [&'static str],
-    /// Paths inside `paths` that stay unmanaged. An adopted mod's files are the
-    /// set quma prunes on update, so anything the image owns separately must be
-    /// left out or an update would delete it.
+    /// Paths inside `paths` that belong to a different mod. An adopted mod's files
+    /// are the set quma prunes on update, so these must be left out.
     exclude: &'static [&'static str],
 }
 
-/// Fika server and client are separate Forge mods; ModSync is GitHub-only.
+/// Fika ships as three separate components from three different places: the server
+/// mod and client plugin are Forge mods, while the headless plugin is GitHub-only,
+/// on its own version line (`FIKA_HEADLESS_VERSION`, 1.4.x). It lives inside the
+/// client's plugin directory but is not part of the client release, so it is
+/// adopted as its own mod and excluded from the client's file list — otherwise the
+/// next client update would prune it as stale and break the headless.
 ///
-/// `Fika.Headless.dll` lives in the client plugin directory but comes from a
-/// different repo (`FIKA_HEADLESS_VERSION`) and is served to the headless by
-/// ModSync — it is not part of the client release, so adopting it would make the
-/// next client update delete it.
+/// ModSync is GitHub-only too (the Dildz SPT4 fork is not on Forge).
 const CORE_MODS: &[CoreMod] = &[
     CoreMod {
         key: "FIKA",
         name: "Project Fika - Server",
         forge_mod_id: Some(crate::config::FIKA_SERVER_FORGE_ID),
+        version_env: "FIKA_VERSION",
+        url_template: None,
+        url_env: None,
         paths: &["SPT/user/mods/fika-server"],
         exclude: &[],
     },
@@ -53,13 +67,33 @@ const CORE_MODS: &[CoreMod] = &[
         key: "FIKA",
         name: "Project Fika",
         forge_mod_id: Some(crate::config::FIKA_CLIENT_FORGE_ID),
+        version_env: "FIKA_VERSION",
+        url_template: None,
+        url_env: None,
         paths: &["BepInEx/plugins/Fika"],
         exclude: &["BepInEx/plugins/Fika/Fika.Headless.dll"],
+    },
+    CoreMod {
+        key: "FIKA",
+        name: "Project Fika - Headless",
+        forge_mod_id: None,
+        version_env: "FIKA_HEADLESS_VERSION",
+        url_template: Some(
+            "https://github.com/project-fika/Fika-Headless/releases/download/v{v}/Fika.Headless.{v}.zip",
+        ),
+        url_env: None,
+        paths: &["BepInEx/plugins/Fika/Fika.Headless.dll"],
+        exclude: &[],
     },
     CoreMod {
         key: "MODSYNC",
         name: "Corter-ModSync",
         forge_mod_id: None,
+        version_env: "MODSYNC_VERSION",
+        url_template: Some(
+            "https://github.com/Dildz/ModSync-for-SPT4.0/releases/download/v{v}/Corter-ModSync-v{v}.zip",
+        ),
+        url_env: Some("MODSYNC_URL"),
         paths: &[
             "SPT/user/mods/Corter-ModSync",
             "BepInEx/plugins/Corter-ModSync",
@@ -81,13 +115,14 @@ pub fn adopt_core_mods(db: &Database, spt_dir: &Path) -> Result<()> {
         if !env_flag(&format!("QUMA_MANAGE_{}", core.key)) {
             continue;
         }
-        let version = std::env::var(format!("{}_VERSION", core.key)).unwrap_or_default();
-        let version = if version.is_empty() {
-            "unknown".to_string()
-        } else {
-            version
-        };
-        let source_url = core.forge_mod_id.is_none().then(|| modsync_url(&version));
+        let version = std::env::var(core.version_env)
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| "unknown".to_string());
+        let source_url = core.url_env.and_then(|e| std::env::var(e).ok()).or_else(|| {
+            core.url_template
+                .map(|t| t.replace("{v}", version.trim_start_matches('v')))
+        });
 
         match adopt(
             db,
@@ -115,16 +150,6 @@ pub fn adopt_core_mods(db: &Database, spt_dir: &Path) -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// The ModSync release the image installed. `MODSYNC_URL` overrides the default
-/// in the image, so honour it here too.
-fn modsync_url(version: &str) -> String {
-    std::env::var("MODSYNC_URL").unwrap_or_else(|_| {
-        format!(
-            "https://github.com/Dildz/ModSync-for-SPT4.0/releases/download/v{version}/Corter-ModSync-v{version}.zip"
-        )
-    })
 }
 
 fn env_flag(name: &str) -> bool {
@@ -262,6 +287,37 @@ mod tests {
                 "SPT/user/mods/fika-server/src/mod.js",
             ]
         );
+    }
+
+    /// The headless plugin is GitHub-only and versioned separately, so it is adopted
+    /// as its own mod — with a release URL, which is what lets quma update-check it —
+    /// and kept out of the Fika client's file list so a client update cannot prune it.
+    #[test]
+    fn the_headless_plugin_is_its_own_github_sourced_mod() {
+        let headless = CORE_MODS
+            .iter()
+            .find(|c| c.name == "Project Fika - Headless")
+            .expect("headless is a core mod");
+        let client = CORE_MODS
+            .iter()
+            .find(|c| c.name == "Project Fika")
+            .expect("client is a core mod");
+
+        assert_eq!(headless.forge_mod_id, None, "not on Forge");
+        assert_eq!(headless.version_env, "FIKA_HEADLESS_VERSION", "own version line");
+        assert_eq!(headless.key, "FIKA", "handed over with the rest of Fika");
+        assert!(client
+            .exclude
+            .contains(&"BepInEx/plugins/Fika/Fika.Headless.dll"));
+
+        // The URL must be a release URL quma can actually check for updates.
+        let url = headless
+            .url_template
+            .expect("headless needs a release URL")
+            .replace("{v}", "1.4.14");
+        let parsed = crate::github::parse_release_url(&url).expect("must parse as a release URL");
+        assert_eq!(parsed.repo, "Fika-Headless");
+        assert_eq!(parsed.asset, "Fika.Headless.1.4.14.zip");
     }
 
     #[test]
