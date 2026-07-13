@@ -124,6 +124,20 @@ pub fn adopt_core_mods(db: &Database, spt_dir: &Path) -> Result<()> {
                 .map(|t| t.replace("{v}", version.trim_start_matches('v')))
         });
 
+        // A GitHub mod is only adoptable if we know which release is installed — the
+        // version is what the update check compares against, and it is baked into the
+        // download URL. This is the "files left behind by a component that has since
+        // been switched off" case (a headless plugin whose FIKA_HEADLESS_VERSION is no
+        // longer set): leave it alone rather than track it as version "unknown".
+        if core.url_template.is_some() && version == "unknown" {
+            tracing::debug!(
+                mod_name = core.name,
+                env = core.version_env,
+                "not adopting — no version to adopt against"
+            );
+            continue;
+        }
+
         match adopt(
             db,
             spt_dir,
