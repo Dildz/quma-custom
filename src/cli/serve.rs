@@ -78,6 +78,11 @@ pub async fn run(bind: Option<&str>, port: Option<u16>, cli: &Cli) -> Result<()>
         anyhow::bail!("No admin user exists. Run `quma setup` first to create an admin account.");
     }
 
+    // Take ownership of the core mods the compose stack handed over (QUMA_MANAGE_*).
+    if let Err(e) = crate::adopt::adopt_core_mods(&db_arc.lock(), &spt_dir) {
+        tracing::warn!(err = %e, "core mod adoption failed — mods stay unmanaged");
+    }
+
     // Create ContainerManager if available
     let container_mgr = match crate::container::ContainerManager::new(config.container_stop_timeout)
     {

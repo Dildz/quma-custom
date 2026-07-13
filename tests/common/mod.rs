@@ -13,7 +13,7 @@ use spt_quartermaster::forge::client::ForgeClient;
 use spt_quartermaster::spt::detect::SptInfo;
 use spt_quartermaster::spt::game_data::GameData;
 use spt_quartermaster::web::state::AppState;
-use spt_quartermaster::web::{configure_app, proxy_metrics::ProxyMetrics};
+use spt_quartermaster::web::configure_app;
 
 /// Test app builder for integration tests.
 pub struct TestAppBuilder {
@@ -129,7 +129,6 @@ impl TestAppBuilder {
         let config = Config {
             session_secret: "test-session-secret-at-least-48-chars-long-abcdefgh".to_string(),
             tls_enabled: false,
-            proxy_enabled: false,
             external_url: self.external_url.clone(),
             ..Config::default()
         };
@@ -146,13 +145,6 @@ impl TestAppBuilder {
 
         let (events_tx, _) =
             tokio::sync::broadcast::channel::<spt_quartermaster::web::sse::ServerEvent>(64);
-
-        let proxy_client = reqwest::Client::builder()
-            .danger_accept_invalid_certs(true)
-            .timeout(std::time::Duration::from_secs(60))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("failed to build proxy HTTP client");
 
         // Build AppState
         let db_arc = Arc::new(Mutex::new(db));
@@ -189,8 +181,6 @@ impl TestAppBuilder {
             svm_installed: std::sync::atomic::AtomicBool::new(false),
             server_transition: Arc::new(parking_lot::Mutex::new(None)),
             game_data: Arc::new(GameData::load_empty()),
-            proxy_metrics: ProxyMetrics::new(),
-            proxy_client,
             mod_zip_cache: spt_quartermaster::web::mod_zip_cache::ModZipCache::new(
                 spt_dir.clone(),
                 db_arc.clone(),

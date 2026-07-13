@@ -145,6 +145,38 @@
 </div>
 {% endif %}
 
+{% if !unmanaged.is_empty() %}
+<div class="card">
+    <h2>Installed outside quma</h2>
+    <p class="text-muted">These mod files are on the server but not managed by quma — installed by the compose stack, or added by hand. Adopt one to update and remove it from here. A GitHub release link lets quma check it for new versions.</p>
+    <table>
+        <thead>
+            <tr><th>Directory</th><th>Files</th>{% if user.can("mods.install") %}<th></th>{% endif %}</tr>
+        </thead>
+        <tbody>
+        {% for u in &unmanaged %}
+            <tr>
+                <td><code>{{ u.dir }}</code></td>
+                <td>{{ u.file_count }}</td>
+                {% if user.can("mods.install") %}
+                <td>
+                    <form method="post" action="/quma/mods/adopt" style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; justify-content: flex-end">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <input type="hidden" name="dir" value="{{ u.dir }}">
+                        <input type="text" name="name" placeholder="Name (optional)" style="width: 10rem">
+                        <input type="text" name="source_url" placeholder="GitHub release URL (optional)" style="width: 16rem">
+                        <input type="text" name="version" placeholder="Version" style="width: 6rem">
+                        <button type="submit" class="btn btn-sm btn-outline">Adopt</button>
+                    </form>
+                </td>
+                {% endif %}
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
 <div hx-get="/quma/api/mods/integrity" hx-trigger="load, sse:integrityChanged" hx-swap="innerHTML">
     <div class="card"><h2>Integrity</h2><p class="text-muted loading-pulse">Checking...</p></div>
 </div>

@@ -1,5 +1,6 @@
 #![deny(clippy::unwrap_used)]
 
+mod adopt;
 mod backup;
 mod cli;
 mod client;
@@ -9,11 +10,13 @@ mod container;
 mod db;
 mod fika;
 mod forge;
+mod github;
 mod headless_sync;
 mod health;
 mod invite;
 mod logging;
 mod modsync;
+mod notify;
 mod numa;
 mod ops;
 mod queue;

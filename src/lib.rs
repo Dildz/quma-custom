@@ -1,5 +1,6 @@
 #![deny(clippy::unwrap_used)]
 
+pub mod adopt;
 pub mod backup;
 pub mod cli;
 pub mod client;
@@ -9,11 +10,13 @@ pub mod container;
 pub mod db;
 pub mod fika;
 pub mod forge;
+pub mod github;
 pub mod headless_sync;
 pub mod health;
 pub mod invite;
 pub mod logging;
 pub mod modsync;
+pub mod notify;
 pub mod numa;
 pub mod ops;
 pub mod queue;

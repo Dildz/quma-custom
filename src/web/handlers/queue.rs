@@ -508,9 +508,10 @@ pub(super) async fn apply_update(op: &PendingOperation, state: &AppState) -> any
             &spt_dir,
             &config,
             db_id,
-            version_id,
+            Some(version_id),
             &version_str,
             &archive_path,
+            None,
         )?;
         Ok::<_, anyhow::Error>(db_id)
     })

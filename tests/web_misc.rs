@@ -75,32 +75,6 @@ async fn metrics_page_requires_auth() {
     assert_eq!(resp.status(), StatusCode::SEE_OTHER);
 }
 
-#[actix_web::test]
-async fn metrics_requires_server_control() {
-    let mut app = TestAppBuilder::new()
-        .with_user("player", "pass", "player")
-        .build()
-        .await;
-
-    app.login_as("player", "pass").await;
-
-    let resp = app.get("/quma/metrics").await;
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-}
-
-#[actix_web::test]
-async fn metrics_loads_for_admin() {
-    let mut app = TestAppBuilder::new()
-        .with_user("admin", "pass", "admin")
-        .build()
-        .await;
-
-    app.login_as("admin", "pass").await;
-
-    let resp = app.get("/quma/metrics").await;
-    assert_eq!(resp.status(), StatusCode::OK);
-}
-
 // Tasks tests
 #[actix_web::test]
 async fn task_status_requires_auth() {

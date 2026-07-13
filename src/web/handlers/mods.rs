@@ -144,6 +144,15 @@ struct ModListTemplate {
     sort_column: String,
     sort_dir: String,
     has_any_mods: bool,
+    unmanaged: Vec<UnmanagedEntry>,
+}
+
+/// A mod directory on disk that quma does not track — installed by the compose
+/// stack, or dropped in by hand. Listed so it is visible, with an Adopt action to
+/// bring it under management.
+struct UnmanagedEntry {
+    dir: String,
+    file_count: usize,
 }
 
 #[derive(Template)]
@@ -197,9 +206,10 @@ struct UpdateStatusTemplate {
 
 struct UpdatesCarouselEntry {
     db_id: i64,
-    forge_mod_id: i64,
+    /// Where to read about the update. Forge mods link to their Forge page; GitHub
+    /// mods link to the release. `None` when there is nowhere useful to point.
+    source_link: Option<String>,
     name: String,
-    slug: Option<String>,
     current_version: String,
     new_version: String,
     update_reason: String,
@@ -538,6 +548,23 @@ pub async fn list_mods(
 
     let grand_total_size: i64 = mods.iter().map(|m| m.total_size).sum();
 
+    // Mods on disk that quma does not track (the image's core mods, or hand-installed
+    // ones). Surfaced so the page reflects the server, not just quma's DB.
+    let db = state.db.clone();
+    let spt_dir = state.spt_dir.clone();
+    let unmanaged: Vec<UnmanagedEntry> = web::block(move || {
+        let db = db.lock();
+        crate::cli::common::find_unmanaged_mod_dirs(&spt_dir, &db)
+    })
+    .await
+    .map_err(WebError::from)?
+    .map(|(dirs, _)| {
+        dirs.into_iter()
+            .map(|(dir, file_count)| UnmanagedEntry { dir, file_count })
+            .collect()
+    })
+    .unwrap_or_default();
+
     let tmpl = ModListTemplate {
         user,
         infrastructure,
@@ -553,8 +580,107 @@ pub async fn list_mods(
         sort_column: sc,
         sort_dir: sd,
         has_any_mods,
+        unmanaged,
     };
     Ok(Html::new(tmpl.render().map_err(WebError::from)?))
+}
+
+#[derive(serde::Deserialize)]
+pub struct AdoptForm {
+    csrf_token: String,
+    dir: String,
+    name: String,
+    version: Option<String>,
+    /// A GitHub release URL makes the adopted mod update-checkable; without one
+    /// quma can track and remove the mod but never offer it an update.
+    source_url: Option<String>,
+}
+
+/// Take an on-disk mod directory under management: record its files so update and
+/// remove work on it.
+pub async fn adopt_mod(
+    state: Data<AppState>,
+    req: HttpRequest,
+    session: Session,
+    form: Form<AdoptForm>,
+) -> actix_web::Result<HttpResponse> {
+    let user = require_auth(&req)?;
+    require_permission(&user, Permission::ModsInstall)?;
+    if !crate::web::csrf::validate_token(&session, &form.csrf_token) {
+        return Err(WebError::Forbidden.into());
+    }
+
+    let form = form.into_inner();
+    let dir = form.dir.trim().to_string();
+    // The directory comes from the page's own unmanaged list, but it arrives as
+    // user input — keep it inside the game root.
+    if dir.is_empty() || dir.contains("..") || dir.starts_with('/') {
+        return Err(WebError::BadRequest("Invalid mod directory".to_string()).into());
+    }
+    let name = if form.name.trim().is_empty() {
+        dir.rsplit('/').next().unwrap_or(&dir).to_string()
+    } else {
+        form.name.trim().to_string()
+    };
+    let source_url = form.source_url.filter(|u| !u.trim().is_empty());
+    if let Some(ref u) = source_url {
+        if crate::github::parse_release_url(u).is_none() {
+            return Err(WebError::BadRequest(
+                "Source URL must be a GitHub release download link".to_string(),
+            )
+            .into());
+        }
+    }
+    // A GitHub release URL carries the version; otherwise fall back to what was typed.
+    let version = source_url
+        .as_deref()
+        .and_then(crate::github::parse_release_url)
+        .map(|r| crate::github::normalize_version(&r.tag).to_string())
+        .or_else(|| form.version.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()))
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let db = state.db.clone();
+    let spt_dir = state.spt_dir.clone();
+    let name_for_msg = name.clone();
+    let adopted = web::block(move || {
+        let db = db.lock();
+        let tracked = db
+            .get_all_tracked_files()?
+            .into_iter()
+            .map(|f| f.file_path)
+            .collect();
+        crate::adopt::adopt(
+            &db,
+            &spt_dir,
+            &tracked,
+            &name,
+            None,
+            &version,
+            source_url.as_deref(),
+            &[&dir],
+            &[],
+        )
+    })
+    .await
+    .map_err(WebError::from)?
+    .map_err(WebError::from)?;
+
+    state.integrity_cache.invalidate();
+    match adopted {
+        Some(n) => set_flash(
+            &session,
+            &format!("Adopted {name_for_msg} ({n} files)"),
+            FlashType::Success,
+        ),
+        None => set_flash(
+            &session,
+            "Nothing to adopt — those files are already tracked",
+            FlashType::Warning,
+        ),
+    }
+    Ok(HttpResponse::SeeOther()
+        .insert_header(("Location", "/quma/mods"))
+        .finish())
 }
 
 pub async fn mod_detail(
@@ -787,6 +913,14 @@ pub async fn update_status_partial(
         version_map.insert(idx, new_ver);
     }
 
+    // GitHub-sourced mods aren't in the Forge response — check their repos too, or
+    // they would never show an update badge.
+    for (i, m) in installed.iter().enumerate() {
+        if let Some(rel) = github_update(m).await {
+            version_map.insert(i, Some(rel.version));
+        }
+    }
+
     let entries: Vec<_> = installed
         .iter()
         .enumerate()
@@ -835,7 +969,7 @@ pub async fn updates_carousel_partial(
     // Match update entries to installed mods, filtering to those with real updates
     let mut updatable: Vec<(
         &crate::db::mods::InstalledMod,
-        &crate::forge::models::UpdateEntry,
+        Option<&crate::forge::models::UpdateEntry>,
     )> = installed
         .iter()
         .filter_map(|m| {
@@ -846,9 +980,16 @@ pub async fn updates_carousel_partial(
                     m.forge_mod_id == Some(u.current_version.mod_id)
                         && u.recommended_version.version != m.version
                 })
-                .map(|u| (m, u))
+                .map(|u| (m, Some(u)))
         })
         .collect();
+
+    // GitHub-sourced mods have no Forge entry — check their repos so they appear here too.
+    for m in &installed {
+        if github_update(m).await.is_some() {
+            updatable.push((m, None));
+        }
+    }
     updatable.sort_by_key(|a| a.0.name.to_lowercase());
 
     let total = updatable.len();
@@ -859,48 +1000,76 @@ pub async fn updates_carousel_partial(
     }
 
     let clamped_index = index % total;
-    let (m, u) = updatable[clamped_index];
+    let (m, maybe_u) = updatable[clamped_index];
 
-    // Fika compat is already on the cached UpdateRecommendedVersion;
-    // only call get_versions for the SPT version constraint.
-    let fika_compat = u
-        .recommended_version
-        .fika_compatibility
-        .as_ref()
-        .map(|f| match f {
-            FikaCompat::Compatible => "compatible".to_string(),
-            FikaCompat::Incompatible => "incompatible".to_string(),
-            FikaCompat::Unknown => "unknown".to_string(),
-        });
+    let entry = match maybe_u {
+        Some(u) => {
+            // Fika compat is already on the cached UpdateRecommendedVersion;
+            // only call get_versions for the SPT version constraint.
+            let fika_compat = u
+                .recommended_version
+                .fika_compatibility
+                .as_ref()
+                .map(|f| match f {
+                    FikaCompat::Compatible => "compatible".to_string(),
+                    FikaCompat::Incompatible => "incompatible".to_string(),
+                    FikaCompat::Unknown => "unknown".to_string(),
+                });
 
-    let forge_mod_id = m
-        .forge_mod_id
-        .ok_or(WebError::BadRequest("Mod has no Forge ID".to_string()))?;
+            let forge_mod_id = m
+                .forge_mod_id
+                .ok_or(WebError::BadRequest("Mod has no Forge ID".to_string()))?;
 
-    let spt_version = match state
-        .forge
-        .get_versions(forge_mod_id, Some(&state.spt_info.spt_version))
-        .await
-    {
-        Ok(versions) => versions
-            .iter()
-            .find(|v| v.version == u.recommended_version.version)
-            .and_then(|v| v.spt_version.clone()),
-        Err(_) => None,
-    };
+            let spt_version = match state
+                .forge
+                .get_versions(forge_mod_id, Some(&state.spt_info.spt_version))
+                .await
+            {
+                Ok(versions) => versions
+                    .iter()
+                    .find(|v| v.version == u.recommended_version.version)
+                    .and_then(|v| v.spt_version.clone()),
+                Err(_) => None,
+            };
 
-    let entry = UpdatesCarouselEntry {
-        db_id: m.id,
-        forge_mod_id,
-        name: m.name.clone(),
-        slug: m.slug.clone(),
-        current_version: m.version.clone(),
-        new_version: u.recommended_version.version.clone(),
-        update_reason: u.update_reason.clone(),
-        spt_version,
-        fika_compat,
-        download_size: u.recommended_version.content_length.map(|s| s as i64),
-        csrf_token: csrf_token.clone(),
+            UpdatesCarouselEntry {
+                db_id: m.id,
+                source_link: m
+                    .slug
+                    .as_ref()
+                    .map(|slug| format!("https://forge.sp-tarkov.com/mod/{forge_mod_id}/{slug}")),
+                name: m.name.clone(),
+                current_version: m.version.clone(),
+                new_version: u.recommended_version.version.clone(),
+                update_reason: u.update_reason.clone(),
+                spt_version,
+                fika_compat,
+                download_size: u.recommended_version.content_length.map(|s| s as i64),
+                csrf_token: csrf_token.clone(),
+            }
+        }
+        None => {
+            // GitHub: no Forge metadata to show (no SPT constraint, no Fika compat,
+            // no content length) — just the versions and a link to the release.
+            let rel = github_update(m)
+                .await
+                .ok_or(WebError::NotFound)?;
+            UpdatesCarouselEntry {
+                db_id: m.id,
+                source_link: m.source_url.as_deref().and_then(|u| {
+                    crate::github::parse_release_url(u)
+                        .map(|r| format!("https://github.com/{}/{}/releases/latest", r.owner, r.repo))
+                }),
+                name: m.name.clone(),
+                current_version: m.version.clone(),
+                new_version: rel.version,
+                update_reason: "newer_release_on_github".to_string(),
+                spt_version: None,
+                fika_compat: None,
+                download_size: None,
+                csrf_token: csrf_token.clone(),
+            }
+        }
     };
 
     let prev_index = if clamped_index == 0 {
@@ -1436,6 +1605,78 @@ pub async fn install_mod(
         .finish())
 }
 
+/// The newer GitHub release for a mod, if there is one.
+///
+/// `None` covers every "no update to offer" case: not a GitHub release URL,
+/// already current, or GitHub unreachable — a failed check must not break the
+/// mods page, so errors are logged and swallowed.
+async fn github_update(installed: &InstalledMod) -> Option<crate::github::LatestRelease> {
+    let r = crate::github::parse_release_url(installed.source_url.as_deref()?)?;
+    let rel = crate::github::latest_release_cached(&r).await?;
+    (rel.version != crate::github::normalize_version(&installed.version)).then_some(rel)
+}
+
+/// Update a mod that was installed from a GitHub release.
+///
+/// ponytail: applies straight away rather than going through the change queue —
+/// the queue is keyed on a Forge mod id, which these mods do not have. Stop the
+/// server first if a mod dislikes being replaced under it.
+async fn update_mod_from_github(
+    state: &Data<AppState>,
+    session: &Session,
+    installed: &InstalledMod,
+) -> actix_web::Result<HttpResponse> {
+    let mod_db_id = installed.id;
+    let back = format!("/quma/mods/{mod_db_id}");
+
+    let Some(rel) = github_update(installed).await else {
+        set_flash(session, "Already up to date", FlashType::Warning);
+        return Ok(HttpResponse::SeeOther()
+            .insert_header(("Location", back))
+            .finish());
+    };
+
+    let tmp_dir = tempfile::tempdir().map_err(WebError::from)?;
+    let archive_path = tmp_dir.path().join("mod.zip");
+    state
+        .forge
+        .download_file(&rel.download_url, &archive_path)
+        .await
+        .map_err(WebError::from)?;
+
+    let db = state.db.clone();
+    let spt_dir = state.spt_dir.clone();
+    let config = state.config_cloned();
+    let version = rel.version.clone();
+    let url = rel.download_url.clone();
+    web::block(move || {
+        let db = db.lock();
+        crate::ops::update_mod_from_archive(
+            &db,
+            &spt_dir,
+            &config,
+            mod_db_id,
+            None,
+            &version,
+            &archive_path,
+            Some(&url),
+        )
+    })
+    .await
+    .map_err(WebError::from)?
+    .map_err(WebError::from)?;
+
+    state.integrity_cache.invalidate();
+    set_flash(
+        session,
+        &format!("Updated {} to {}", installed.name, rel.version),
+        FlashType::Success,
+    );
+    Ok(HttpResponse::SeeOther()
+        .insert_header(("Location", back))
+        .finish())
+}
+
 pub async fn update_mod(
     state: Data<AppState>,
     path: Path<i64>,
@@ -1460,9 +1701,11 @@ pub async fn update_mod(
     .map_err(WebError::from)?
     .ok_or(WebError::NotFound)?;
 
-    let forge_mod_id = installed
-        .forge_mod_id
-        .ok_or(WebError::BadRequest("Mod has no Forge ID".to_string()))?;
+    // A mod installed from a GitHub release is checked against that repo, not Forge.
+    let forge_mod_id = match installed.forge_mod_id {
+        Some(id) => id,
+        None => return update_mod_from_github(&state, &session, &installed).await,
+    };
 
     let versions = state
         .forge

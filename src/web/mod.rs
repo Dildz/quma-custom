@@ -632,6 +632,7 @@ pub fn configure_app(
             web::get().to(handlers::profiles::profile_page),
         )
         .route("/mods/install", web::post().to(handlers::mods::install_mod))
+        .route("/mods/adopt", web::post().to(handlers::mods::adopt_mod))
         .route(
             "/mods/update-all",
             web::post().to(handlers::mods::update_all_mods),
@@ -957,6 +958,16 @@ pub async fn start_server(ctx: ServerContext) -> Result<()> {
 
     // Pre-warm mod ZIP cache in background
     app_state.mod_zip_cache.invalidate();
+
+    // Poll Forge + GitHub for mod updates and announce them (no-op without a webhook).
+    crate::notify::spawn(
+        app_state.db.clone(),
+        app_state.forge.clone(),
+        app_state.update_cache.clone(),
+        app_state.spt_info.spt_version.clone(),
+        config.discord_webhook_url.clone(),
+        config.update_notify_interval,
+    );
 
     let governor_conf = GovernorConfigBuilder::default()
         .seconds_per_request(12)
