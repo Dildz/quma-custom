@@ -14,7 +14,10 @@
     </form>
 </h1>
 
-<div hx-get="/quma/api/mods/integrity/progress" hx-trigger="load" hx-swap="innerHTML">
+<!-- hx-target/hx-select are INHERITED from ancestors. Without pinning them to this
+     element, this poll inherits the wrapper's hx-target="#file-tracking-content" and
+     swaps its tiny <span> response over the whole page body, blanking it. -->
+<div hx-get="/quma/api/mods/integrity/progress" hx-trigger="load" hx-target="this" hx-select="unset" hx-swap="innerHTML">
 </div>
 
 <div class="card">
