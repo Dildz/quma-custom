@@ -8,6 +8,7 @@ pub mod integrity_cache;
 pub mod invite;
 pub mod mod_zip_cache;
 pub mod nav;
+pub mod poller;
 pub mod raid_tracker;
 pub mod sse;
 pub mod state;
@@ -81,8 +82,6 @@ pub struct ServerContext {
     pub log_broadcast: Arc<LogBroadcast>,
     pub reload_handles: Arc<ReloadHandles>,
     pub container_mgr: Option<Arc<crate::container::ContainerManager>>,
-    pub client_states: Option<Arc<tokio::sync::RwLock<Vec<crate::client::ClientState>>>>,
-    pub converging: Arc<std::sync::atomic::AtomicBool>,
     pub fika_installed: bool,
     pub modsync_installed: bool,
     pub log_level_counts: crate::logging::writer::LogLevelCounts,
@@ -243,7 +242,7 @@ pub fn configure_app(
         )
         .route(
             "/dashboard/headless-status",
-            web::get().to(handlers::clients::dashboard_clients_status_partial),
+            web::get().to(handlers::clients::dashboard_headless_status),
         )
         .route(
             "/dashboard/players",
@@ -264,7 +263,7 @@ pub fn configure_app(
         )
         .route(
             "/headless/status",
-            web::get().to(handlers::clients::client_status_partial),
+            web::get().to(handlers::clients::headless_status_partial),
         )
         .route(
             "/profiles/{username}/quests",
@@ -605,10 +604,6 @@ pub fn configure_app(
             web::post().to(handlers::settings::save_logging_settings),
         )
         .route(
-            "/settings/headless",
-            web::post().to(handlers::settings::save_headless_settings),
-        )
-        .route(
             "/settings/fika",
             web::get().to(handlers::fika_settings::fika_settings_page),
         )
@@ -617,10 +612,6 @@ pub fn configure_app(
             web::post().to(handlers::fika_settings::fika_settings_save),
         )
         .route("/headless", web::get().to(handlers::clients::headless_page))
-        .route(
-            "/headless/{n}",
-            web::get().to(handlers::clients::client_detail),
-        )
         .route("/stats", web::get().to(handlers::raids::stats_page))
         .route("/raids", web::get().to(handlers::raids::all_raids_page))
         .route(
@@ -740,45 +731,27 @@ pub fn configure_app(
             web::post().to(handlers::queue::cancel_and_reject_op),
         )
         .route("/queue/apply", web::post().to(handlers::queue::apply_queue))
+        // Headless: monitor-only. Lifecycle acts on the compose-managed container
+        // by name; per-client actions are Fika API calls keyed by profile ID.
         .route(
-            "/headless/{n}/restart",
-            web::post().to(handlers::clients::client_restart),
+            "/headless/start",
+            web::post().to(handlers::clients::headless_start),
         )
         .route(
-            "/headless/{n}/graceful-restart",
-            web::post().to(handlers::clients::client_graceful_restart),
+            "/headless/stop",
+            web::post().to(handlers::clients::headless_stop),
         )
         .route(
-            "/headless/{n}/stop",
-            web::post().to(handlers::clients::client_stop),
+            "/headless/restart",
+            web::post().to(handlers::clients::headless_restart),
         )
         .route(
-            "/headless/{n}/start",
-            web::post().to(handlers::clients::client_start),
+            "/headless/{profile_id}/graceful-restart",
+            web::post().to(handlers::clients::headless_graceful_restart),
         )
         .route(
-            "/headless/scale",
-            web::post().to(handlers::clients::client_scale),
-        )
-        .route(
-            "/headless/converge",
-            web::post().to(handlers::clients::client_converge),
-        )
-        .route(
-            "/headless/create",
-            web::post().to(handlers::clients::client_create),
-        )
-        .route(
-            "/headless/{n}/delete",
-            web::post().to(handlers::clients::client_delete),
-        )
-        .route(
-            "/headless/{n}/rename",
-            web::post().to(handlers::clients::client_rename),
-        )
-        .route(
-            "/headless/{n}/start-raid",
-            web::post().to(handlers::clients::client_start_raid),
+            "/headless/{profile_id}/start-raid",
+            web::post().to(handlers::clients::headless_start_raid),
         )
         .route("/broadcast", web::post().to(handlers::dashboard::broadcast))
         .route(
@@ -828,8 +801,6 @@ pub async fn start_server(ctx: ServerContext) -> Result<()> {
         log_broadcast,
         reload_handles,
         container_mgr,
-        client_states,
-        converging,
         fika_installed,
         modsync_installed,
         log_level_counts,
@@ -900,11 +871,17 @@ pub async fn start_server(ctx: ServerContext) -> Result<()> {
         let fika_config_path = crate::fika::config::fika_config_path(&spt_dir);
         match crate::fika::config::read_fika_config(&fika_config_path) {
             Ok(fika_config) if !fika_config.server.api_key.is_empty() => {
-                let base_url = format!(
-                    "https://{}:{}",
-                    fika_config.server.spt.http.backend_ip,
-                    fika_config.server.spt.http.backend_port
-                );
+                // fika.jsonc's backendIp is a *bind* address — "0.0.0.0" by default. Dialling it
+                // from inside quma's own container hits quma, not SPT. Use the host/port we
+                // already reach the server on; fall back to fika.jsonc for native installs.
+                let host = config
+                    .server_host
+                    .clone()
+                    .unwrap_or_else(|| fika_config.server.spt.http.backend_ip.clone());
+                let port = config
+                    .server_port
+                    .unwrap_or(fika_config.server.spt.http.backend_port);
+                let base_url = format!("https://{host}:{port}");
                 match crate::fika::client::FikaClient::new(&base_url, fika_config.server.api_key) {
                     Ok(client) => {
                         tracing::info!("FikaClient initialized");
@@ -944,8 +921,6 @@ pub async fn start_server(ctx: ServerContext) -> Result<()> {
         log_broadcast,
         reload_handles,
         container_mgr,
-        client_states,
-        converging,
         fika_installed,
         modsync_installed: std::sync::atomic::AtomicBool::new(modsync_installed),
         svm,
@@ -962,6 +937,18 @@ pub async fn start_server(ctx: ServerContext) -> Result<()> {
 
     // Pre-warm mod ZIP cache in background
     app_state.mod_zip_cache.invalidate();
+
+    // Derive raid start/end from Fika presence (replaces the deleted proxy hook).
+    crate::web::poller::spawn(app_state.fika_client.clone().map(|fika| {
+        crate::web::poller::PollerContext {
+            fika,
+            db: app_state.db.clone(),
+            events: app_state.events.clone(),
+            spt_dir: app_state.spt_dir.clone(),
+            snapshots_enabled: config.snapshots_enabled,
+            interval_secs: config.fika_poll_secs,
+        }
+    }));
 
     // Poll Forge + GitHub for mod updates and announce them (no-op without a webhook).
     crate::notify::spawn(
