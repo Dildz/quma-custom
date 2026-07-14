@@ -38,7 +38,10 @@ if [ "$(id -u)" = "0" ]; then
 fi
 
 # Unprivileged phase (dropped above, or compose set `user:` directly).
-if [ ! -f "$QUMA_SPT_DIR/quartermaster.toml" ]; then
+# Gate on the db as well as the toml: the admin user lives in the db, so a surviving
+# toml alone would skip setup and leave `serve` dead on "No admin user exists".
+# setup is idempotent — it reuses an existing toml and skips an existing admin.
+if [ ! -f "$QUMA_SPT_DIR/quartermaster.toml" ] || [ ! -f "$QUMA_SPT_DIR/quartermaster.db" ]; then
   if [ -z "$QUMA_ADMIN_PASSWORD" ]; then
     echo "quma: first-boot setup needs QUMA_ADMIN_PASSWORD (set it in .env, min 8 chars)" >&2
     exit 1
