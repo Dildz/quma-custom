@@ -64,8 +64,10 @@ const CORE_MODS: &[CoreMod] = &[
         exclude: &[],
     },
     CoreMod {
+        // Forge calls this one just "Project Fika", which reads as the whole project
+        // next to "- Server" and "- Headless". Name it for what it is: the client plugin.
         key: "FIKA",
-        name: "Project Fika",
+        name: "Project Fika - Client",
         forge_mod_id: Some(crate::config::FIKA_CLIENT_FORGE_ID),
         version_env: "FIKA_VERSION",
         url_template: None,
@@ -314,7 +316,7 @@ mod tests {
             .expect("headless is a core mod");
         let client = CORE_MODS
             .iter()
-            .find(|c| c.name == "Project Fika")
+            .find(|c| c.name == "Project Fika - Client")
             .expect("client is a core mod");
 
         assert_eq!(headless.forge_mod_id, None, "not on Forge");
