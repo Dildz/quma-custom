@@ -67,24 +67,22 @@ Single Rust binary — the CLI and actix-web server share the same codebase. The
 ### Core Layers
 
 - **`src/cli/`** — One file per CLI subcommand (clap derive). Each command's `run()` function is the entry point. `common.rs` holds `CliContext` (spt_dir, config, db, forge client) and shared helpers like `resolve_mod()` for resolving user input to Forge mod IDs.
-- **`src/web/`** — actix-web server. `mod.rs` defines all routes and middleware wiring. `state.rs` defines `AppState` (shared via `web::Data`). Handlers live in `web/handlers/` (one file per page group: admin, auth, backup, clients, common, dashboard, join, logs, metrics, mods, modsync, profiles, queue, raids, requests, server, settings, setup, svm, tasks). `common.rs` has shared helpers (`ForgeSearchResult`, `forge_search`). Authentication uses `RequireAuth` middleware with RBAC permission checks per-handler via `require_permission(&user, Permission::X)`. Supporting modules: `sse.rs` (SSE broadcast), `flash.rs` (flash messages), `template_filters.rs` (Askama filters), `update_cache.rs` (Forge update cache), `raid_tracker.rs` (per-raid stats via proxy interception), `csrf.rs` (CSRF token protection), `nav.rs` (navigation helpers), `error.rs` (error rendering), `install.rs` (shared download/extract/record for mods+requests), `invite.rs` (invite code handling), `tasks.rs` (background task management), `mod_zip_cache.rs` (cached mod ZIP for join page).
+- **`src/web/`** — actix-web server. `mod.rs` defines all routes and middleware wiring. `state.rs` defines `AppState` (shared via `web::Data`). Handlers live in `web/handlers/` (one file per page group: admin, auth, backup, clients, common, dashboard, join, logs, metrics, mods, modsync, profiles, queue, raids, requests, server, settings, setup, svm, tasks). `common.rs` has shared helpers (`ForgeSearchResult`, `forge_search`). Authentication uses `RequireAuth` middleware with RBAC permission checks per-handler via `require_permission(&user, Permission::X)`. Supporting modules: `sse.rs` (SSE broadcast), `flash.rs` (flash messages), `template_filters.rs` (Askama filters), `update_cache.rs` (Forge update cache), `raid_tracker.rs` (per-raid stats, fed by the Fika presence poller), `poller.rs` (polls Fika presence to derive raid start/end), `csrf.rs` (CSRF token protection), `nav.rs` (navigation helpers), `error.rs` (error rendering), `install.rs` (shared download/extract/record for mods+requests), `invite.rs` (invite code handling), `tasks.rs` (background task management), `mod_zip_cache.rs` (cached mod ZIP for join page).
 - **`src/db/`** — SQLite via rusqlite (WAL mode, `busy_timeout=5000`). `schema.rs` runs migrations from `migrations/` directory; each migration is wrapped in a transaction (`unchecked_transaction`) that includes the version bump. `mods.rs` has mod CRUD, `addons.rs` has addon CRUD, `users.rs` has user/invite operations, `raids.rs` has raid and kill CRUD, `requests.rs` has mod request/voting operations, `backups.rs` has backup metadata CRUD, `rbac.rs` has role-based access control queries, `logs.rs` has log storage and querying for the SQLite log viewer. Database is wrapped in `Arc<parking_lot::Mutex<Database>>` for web access.
 - **`src/forge/`** — HTTP client for SPT Forge API (`https://forge.sp-tarkov.com/api/v0`). `client.rs` is the reqwest-based client, `models.rs` defines API response types. Key quirk: `fika_compatibility` is a boolean on mod objects but a string enum on version objects.
 - **`src/spt/`** — SPT directory interaction. `detect.rs` auto-detects SPT installs and reads version info from `core.json`. `mods.rs` handles archive extraction (ZIP/7z), file hashing, and mod file management. Both ZIP and 7z extraction reject symlink entries (tested via `zip_rejects_symlink` and `sevenz_rejects_symlink_entry`). `profiles.rs` reads SPT player profiles. `server.rs` handles SPT server HTTP communication (HTTPS with self-signed certs, zlib compression disabled via `responsecompressed: 0` header).
 - **`src/ops.rs`** — Core mod operations: `install_mod_from_archive`, `update_mod_from_archive`, `remove_mod_by_id`. Both install and update extract to a `tempfile::tempdir()` staging directory before committing to the DB and moving files into place. Async updates use `apply_mod_update` with a `pending_updates` marker for crash recovery (`recover_pending_updates` runs on startup).
 - **`src/backup.rs`** — Mod backup/restore system: per-mod and full snapshots of mod files, profiles, and config. Used by CLI `backup`/`restore` commands and web backup handler.
 - **`src/health.rs`** — Health check system: server liveness, version verification, mod load verification, file integrity (SHA256).
-- **`src/container.rs`** — Container management for SPT server lifecycle via bollard (Docker Engine API; tries `/var/run/docker.sock` first, falls back to the Podman rootless socket). Default SPT server image: `ghcr.io/dildz/spt-fika-server:latest` (local-fork default; used only when `setup` creates a container from scratch — on this box, wrap the compose-managed container instead). Default headless client image: `localhost/fika-headless:latest` (configurable via `headless.image` in config).
+- **`src/container.rs`** — Container management for SPT server lifecycle via bollard (Docker Engine API; tries `/var/run/docker.sock` first, falls back to the Podman rootless socket). Default SPT server image: `ghcr.io/dildz/spt-fika-server:latest` (local-fork default; used only when `setup` creates a container from scratch — on this box, wrap the compose-managed container instead). quma never creates a headless container.
 - **`src/queue.rs`** — Change queue: mod operations are queued when SPT server is running, applied when stopped.
 - **`src/server_detect.rs`** — Server running detection (Podman inspect or HTTP ping fallback).
 - **`src/logging/`** — Structured logging with tracing. `mod.rs` has `LogBroadcast` (tokio broadcast + ring buffer), tracing subscriber setup, and per-layer target filtering. `compact.rs` is a custom compact console formatter. `writer.rs` is an async SQLite log writer for the log viewer. Supports console, file (with rotation), SQLite persistence, and web broadcast (SSE). Web log viewer caps DOM at 2000 entries with `trimOldEntries()` and disconnects SSE on hidden tabs.
 - **`src/config.rs`** — Config types (serde TOML), env var overrides (`QUMA_*` prefix), and config resolution logic.
 - **`src/modsync.rs`** — NarcoNet integration: regenerates `config.yaml` from installed mod state so clients auto-sync.
-- **`src/headless_sync.rs`** — Syncs Fika-managed files (`BepInEx/plugins/Fika/`, `Fika.Headless/`) to headless client overlays.
-- **`src/numa.rs`** — NUMA topology detection for container CPU pinning.
-- **`src/tls.rs`** — TLS certificate loading/generation for the HTTPS proxy.
+- **`src/client_files.rs`** — Classifies mod files as client-side or server-side. quma does not copy client files to the headless — ModSync owns that.
+- **`src/tls.rs`** — TLS certificate loading/generation.
 - **`src/invite.rs`** — Invite code generation and expiry parsing.
-- **`src/client/`** — Fika headless client management. `supervisor.rs` runs the convergence loop, `converge.rs` handles container creation/scaling/overlay setup. Exit watchers cache restart policy/backoff values at spawn time (config changes to those require supervisor restart).
 - **`src/spt/headless.rs`** — SPT server API types for headless client queries.
 - **`src/spt/game_data.rs`** — Loads quest/trader/hideout metadata from SPT data files for profile display.
 - **`src/svm/`** — Server Value Modifier (SVM) support. `metadata.rs` defines SVM categories and parameter metadata, `config.rs` handles reading/writing SVM config files.
@@ -96,7 +94,25 @@ Single Rust binary — the CLI and actix-web server share the same codebase. The
 - **Sessions**: Signed cookies via actix-session (`CookieSessionStore`), 7-day TTL, SameSite=Strict, HttpOnly.
 - **Rate limiting**: actix-governor on `/login` POST and `/register` (5 req/min/IP).
 - **CSRF**: Token-based protection in `web/csrf.rs`.
-- **HTTPS/WSS Proxy**: `web/proxy.rs` and `web/proxy_ws.rs` provide a transparent reverse proxy to the SPT server, letting clients connect through Quartermaster. `web/proxy_metrics.rs` tracks request counts and latencies.
+
+### Headless clients — monitor only
+
+quma does **not** own the headless clients: the compose stack starts them, and ModSync
+delivers their mods. quma monitors them and can start/stop/restart the one container named
+by `headless_container` (`QUMA_HEADLESS_CONTAINER`). Status and player lists come from the
+Fika API (`/fika/headless/get`), not from any internal supervisor state.
+
+The convergence/supervisor subsystem that used to create, scale, and pin quma-owned headless
+containers (`src/client/`, `src/numa.rs`, `cli/headless.rs`) has been removed — do not
+reintroduce a code path that creates a headless container.
+
+### Raid stats
+
+Raids are recorded by `web/poller.rs`, which polls Fika presence (`/fika/presence/get`) every
+`fika_poll_secs` and derives raid start/end from players entering and leaving a map. Exit status
+is recovered by diffing the profile's `Stats.Eft.OverallCounters` `ExitStatus/*` entries across
+the raid; kills come from the `Victims` array; the killer from `Aggressor`. The SPT profile on
+disk is the source of truth — quma has the mount.
 
 ### Key Patterns
 

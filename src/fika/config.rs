@@ -32,18 +32,6 @@ pub fn read_fika_cst(path: &Path) -> Result<CstRootNode> {
         .map_err(|e| anyhow::anyhow!("JSONC CST parse error: {e}"))
 }
 
-/// Modify headless.profiles.amount in a CST.
-pub fn set_headless_amount(cst: &CstRootNode, amount: u32) {
-    let root = cst.object_value_or_set();
-    if let Some(headless) = root.object_value("headless") {
-        if let Some(profiles) = headless.object_value("profiles") {
-            if let Some(prop) = profiles.get("amount") {
-                prop.set_value(jsonc_parser::cst::CstInputValue::Number(amount.to_string()));
-            }
-        }
-    }
-}
-
 /// Write CST back to disk atomically (tempfile + rename).
 pub fn write_fika_cst(cst: &CstRootNode, path: &Path) -> Result<()> {
     let content = cst.to_string();
@@ -266,34 +254,4 @@ mod tests {
         assert_eq!(config.client.revive_config.max_revives, 3);
     }
 
-    #[test]
-    fn cst_set_headless_amount_preserves_comments() {
-        let cst =
-            CstRootNode::parse(SAMPLE_FIKA_JSONC, &Default::default()).expect("CST parse failed");
-        set_headless_amount(&cst, 5);
-        let output = cst.to_string();
-        // Comment preserved
-        assert!(output.contains("// client settings"));
-        // Value changed
-        let reparsed = parse_fika_jsonc(&output).expect("reparse failed");
-        assert_eq!(reparsed.headless.profiles.amount, 5);
-    }
-
-    #[test]
-    fn set_headless_amount_matches_old_regex_behavior() {
-        // This test verifies that the CST method produces the same outcome as the old regex,
-        // just via a different path. We don't verify identical strings, but that both set
-        // the amount field and preserve comments.
-        let cst =
-            CstRootNode::parse(SAMPLE_FIKA_JSONC, &Default::default()).expect("CST parse failed");
-        set_headless_amount(&cst, 10);
-        let output = cst.to_string();
-
-        // Verify the value changed
-        let config = parse_fika_jsonc(&output).expect("reparse failed");
-        assert_eq!(config.headless.profiles.amount, 10);
-
-        // Verify comments preserved
-        assert!(output.contains("// client settings"));
-    }
 }

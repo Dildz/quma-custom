@@ -1,4 +1,3 @@
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -121,98 +120,12 @@ pub async fn run(bind: Option<&str>, port: Option<u16>, cli: &Cli) -> Result<()>
 
     let fika_installed = is_fika_installed(&spt_dir);
     let modsync_installed = crate::config::is_modsync_installed(&spt_dir);
-    let converging = Arc::new(AtomicBool::new(false));
     let config_arc = Arc::new(parking_lot::RwLock::new(config));
 
-    // Initialize client supervisor. Always start it when Fika is installed and
-    // Podman is available so that clients added via the web UI are picked up
-    // without requiring a server restart.
+    // Headless clients are owned by the compose stack, not by quma. There is no
+    // supervisor and no convergence loop — the web layer reads their status
+    // straight from the Fika API (see web::handlers::clients).
     let config = config_arc.read().clone();
-    let client_states = if fika_installed {
-        if let Some(ref container_mgr_arc) = container_mgr {
-            let (host, port) = crate::server_detect::resolve_server_addr(&config, &spt_dir);
-            match crate::spt::server::SptClient::new(&host, port) {
-                Ok(spt_client) => {
-                    // Run initial convergence if clients are already configured
-                    if let Some(ref headless_config) = config.headless {
-                        if headless_config.client_count() > 0 {
-                            if let Err(e) = headless_config.validate(&config, &spt_dir) {
-                                tracing::error!(err = %e, "Invalid headless configuration — skipping initial convergence");
-                            } else {
-                                tracing::info!(
-                                    "Running initial convergence for {} headless client(s)",
-                                    headless_config.client_count()
-                                );
-                                if let Err(e) = crate::client::converge::converge(
-                                    container_mgr_arc,
-                                    headless_config,
-                                    &config,
-                                    &spt_dir,
-                                    &spt_client,
-                                    &forge,
-                                    &spt_info.spt_version,
-                                    Arc::clone(&converging),
-                                    &db_arc,
-                                )
-                                .await
-                                {
-                                    tracing::error!(err = %e, "Initial convergence failed");
-                                }
-                            }
-                        }
-                    }
-
-                    let cancel_token = tokio_util::sync::CancellationToken::new();
-                    let supervisor = crate::client::supervisor::ClientSupervisor::new(
-                        container_mgr_arc.as_ref().clone(),
-                        spt_client,
-                        Arc::clone(&config_arc),
-                        Arc::clone(&db_arc),
-                        Arc::clone(&converging),
-                        cancel_token,
-                    );
-
-                    let states = supervisor.state();
-                    supervisor.run();
-
-                    let client_count = config
-                        .headless
-                        .as_ref()
-                        .map(|h| h.client_count())
-                        .unwrap_or(0);
-                    tracing::info!(
-                        "ClientSupervisor started (managing {client_count} headless client(s))"
-                    );
-                    Some(states)
-                }
-                Err(e) => {
-                    let has_clients = config
-                        .headless
-                        .as_ref()
-                        .is_some_and(|h| h.client_count() > 0);
-                    if has_clients {
-                        tracing::error!(err = %e, "Failed to create SPT client — supervisor not started");
-                        return Err(e);
-                    }
-                    tracing::warn!(err = %e, "Failed to create SPT client — supervisor not started");
-                    None
-                }
-            }
-        } else {
-            if config
-                .headless
-                .as_ref()
-                .is_some_and(|h| h.client_count() > 0)
-            {
-                tracing::warn!(
-                    "Headless clients configured but Podman unavailable — supervisor not started"
-                );
-            }
-            None
-        }
-    } else {
-        None
-    };
 
     let on_exit = config.on_exit.clone();
     let teardown_mgr = container_mgr.clone();
@@ -228,8 +141,6 @@ pub async fn run(bind: Option<&str>, port: Option<u16>, cli: &Cli) -> Result<()>
         log_broadcast: Arc::clone(&log_broadcast),
         reload_handles: Arc::new(reload_handles),
         container_mgr,
-        client_states,
-        converging,
         fika_installed,
         modsync_installed,
         log_level_counts: Arc::clone(&log_level_counts),

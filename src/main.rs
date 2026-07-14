@@ -3,7 +3,6 @@
 mod adopt;
 mod backup;
 mod cli;
-mod client;
 mod config;
 mod config_mgmt;
 mod container;
@@ -11,13 +10,12 @@ mod db;
 mod fika;
 mod forge;
 mod github;
-mod headless_sync;
+mod client_files;
 mod health;
 mod invite;
 mod logging;
 mod modsync;
 mod notify;
-mod numa;
 mod ops;
 mod queue;
 mod server_detect;
@@ -155,10 +153,6 @@ async fn main() -> Result<()> {
         Command::Server { action } => {
             let ctx = init_context(&cli, &reload_handles)?;
             cli::server::run(action, &ctx).await
-        }
-        Command::Headless { action } => {
-            let ctx = init_context(&cli, &reload_handles)?;
-            cli::headless::run(action, &ctx).await
         }
         Command::Invite { expires } => {
             let ctx = init_context(&cli, &reload_handles)?;

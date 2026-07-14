@@ -1,25 +1,29 @@
-{% import "clients/partials/badges.html" as badges %}
-{% if total_count == 0 %}
+{% if let Some(c) = container %}
 <div class="stat-value" style="font-size: 1rem;">
-    <span class="text-muted">No clients</span>
-</div>
-{% else %}
-<div class="stat-value" style="font-size: 1rem;">{{ total_count }}</div>
-<div class="stat-detail">
-    {% if healthy_count == total_count %}
-    <span style="color: var(--success)">All healthy</span>
+    {% if c.running %}
+    <span style="color: var(--success)">Running</span>
     {% else %}
-    <span style="color: var(--success)">{{ healthy_count }}</span> /
-    {% if degraded_count > 0 %}<span style="color: var(--warning)">{{ degraded_count }}</span> /{% endif %}
-    {% if down_count > 0 %}<span style="color: var(--error)">{{ down_count }}</span>{% endif %}
+    <span style="color: var(--error)">Stopped</span>
     {% endif %}
 </div>
+<div class="stat-detail"><code>{{ c.name }}</code></div>
+{% else %}
+<div class="stat-value" style="font-size: 1rem;">
+    <span class="text-muted">No headless</span>
+</div>
+{% endif %}
+
+{% if !clients.is_empty() %}
 <div style="margin-top: 0.5rem; font-size: 0.85rem;">
     {% for client in clients %}
     <div style="display: flex; align-items: center; gap: 0.5rem; padding: 0.15rem 0;">
-        <span class="text-muted">{{ client.state.index }}</span>
-        {% call badges::container_status(client.state.container_status) %}{% endcall %}
-        {% call badges::fika_status(client.state.fika_status) %}{% endcall %}
+        {% if client.in_raid %}
+        <span class="badge badge-warning">In Raid</span>
+        {% else if client.ready %}
+        <span class="badge badge-success">Ready</span>
+        {% else %}
+        <span class="badge">{{ client.status }}</span>
+        {% endif %}
         {% if !client.players.is_empty() %}
         <span>{% for player in client.players %}{% if !loop.first %}, {% endif %}{{ player.name }}{% endfor %}</span>
         {% endif %}

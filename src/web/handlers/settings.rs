@@ -4,8 +4,8 @@ use actix_web::{HttpRequest, HttpResponse};
 use askama::Template;
 
 use crate::config::{
-    Config, ConsoleFormat, ConsoleLogConfig, FileFormat, FileLogConfig, HeadlessConfig,
-    HeadlessDisplayServer, LoggingConfig, RestartPolicy, RotationPolicy, WebLogConfig,
+    Config, ConsoleFormat, ConsoleLogConfig, FileFormat, FileLogConfig, LoggingConfig,
+    RotationPolicy, WebLogConfig,
 };
 use crate::db::rbac::Permission;
 use crate::web::auth::{require_auth, require_permission, SessionUser};
@@ -134,27 +134,6 @@ pub struct LoggingSettingsForm {
     web_level: String,
     web_retention_days: u64,
     web_max_entries: u64,
-}
-
-#[derive(serde::Deserialize)]
-pub struct HeadlessSettingsForm {
-    csrf_token: String,
-    install_dir: String,
-    restart_policy: String,
-    max_restart_attempts: u32,
-    restart_backoff_cap: u64,
-    server_ready_timeout: u64,
-    base_udp_port: u16,
-    image: String,
-    isolated_paths: String,
-    display_server: String,
-    #[serde(default)]
-    numa_policy: String,
-    numa_node: Option<u32>,
-    #[serde(default)]
-    use_upnp: Option<String>,
-    #[serde(default)]
-    physical_cores_only: Option<String>,
 }
 
 pub async fn save_web_settings(
@@ -385,80 +364,3 @@ pub async fn save_logging_settings(
         .finish())
 }
 
-pub async fn save_headless_settings(
-    state: Data<AppState>,
-    req: HttpRequest,
-    session: Session,
-    form: Form<HeadlessSettingsForm>,
-) -> actix_web::Result<HttpResponse> {
-    let user = require_auth(&req)?;
-    require_permission(&user, Permission::SettingsManage)?;
-    if !crate::web::csrf::validate_token(&session, &form.csrf_token) {
-        return Err(WebError::Forbidden.into());
-    }
-
-    let restart_policy: RestartPolicy = form.restart_policy.parse().unwrap_or(RestartPolicy::Auto);
-
-    let isolated: Vec<String> = form
-        .isolated_paths
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect();
-
-    let _guard = state.config_lock.lock();
-    let mut config = Config::load(&state.config_path).map_err(WebError::from)?;
-    let existing = config.headless.as_ref();
-
-    let (numa_auto, numa_node) = match form.numa_policy.as_str() {
-        "auto" => (true, None),
-        "node" => (false, form.numa_node),
-        "none" => (false, None),
-        _ => {
-            // Form fields absent (e.g., no NUMA hardware detected) — preserve existing config
-            existing
-                .map(|h| (h.numa_auto, h.numa_node))
-                .unwrap_or((false, None))
-        }
-    };
-
-    let final_config = HeadlessConfig {
-        install_dir: std::path::PathBuf::from(form.install_dir.trim()),
-        restart_policy,
-        max_restart_attempts: form.max_restart_attempts,
-        restart_backoff_cap: form.restart_backoff_cap,
-        base_udp_port: form.base_udp_port,
-        image: form.image.trim().to_string(),
-        isolated_paths: isolated,
-        display_server: match form.display_server.as_str() {
-            "xvfb" => HeadlessDisplayServer::Xvfb,
-            _ => HeadlessDisplayServer::Gamescope,
-        },
-        numa_auto,
-        numa_node,
-        clients: existing.map(|h| h.clients.clone()).unwrap_or_default(),
-        runner: existing.map(|h| h.runner.clone()).unwrap_or_default(),
-        ntsync: existing.map(|h| h.ntsync).unwrap_or(true),
-        esync: existing.map(|h| h.esync).unwrap_or(false),
-        fsync: existing.map(|h| h.fsync).unwrap_or(false),
-        save_log_on_exit: existing.map(|h| h.save_log_on_exit).unwrap_or(true),
-        enable_log_purge: existing.map(|h| h.enable_log_purge).unwrap_or(false),
-        overwrite_fika: existing.map(|h| h.overwrite_fika).unwrap_or(true),
-        server_ready_timeout: form.server_ready_timeout,
-        use_upnp: form.use_upnp.is_some(),
-        physical_cores_only: form.physical_cores_only.is_some(),
-    };
-
-    config.headless = if form.install_dir.trim().is_empty() {
-        None
-    } else {
-        Some(final_config)
-    };
-
-    state.persist_config(&config)?;
-
-    set_flash(&session, "Headless settings saved", FlashType::Success);
-    Ok(HttpResponse::SeeOther()
-        .insert_header(("Location", "/quma/headless"))
-        .finish())
-}

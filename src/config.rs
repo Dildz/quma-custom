@@ -231,62 +231,8 @@ fn default_max_entries() -> u64 {
     100_000
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum RestartPolicy {
-    Auto,
-    Manual,
-}
-
-impl std::fmt::Display for RestartPolicy {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RestartPolicy::Auto => write!(f, "auto"),
-            RestartPolicy::Manual => write!(f, "manual"),
-        }
-    }
-}
-
-impl std::str::FromStr for RestartPolicy {
-    type Err = anyhow::Error;
-    fn from_str(s: &str) -> Result<Self> {
-        match s {
-            "auto" => Ok(RestartPolicy::Auto),
-            "manual" => Ok(RestartPolicy::Manual),
-            _ => bail!("unknown restart policy: {s}"),
-        }
-    }
-}
-
-fn default_restart_policy() -> RestartPolicy {
-    RestartPolicy::Auto
-}
-fn default_max_restart_attempts() -> u32 {
-    5
-}
-fn default_restart_backoff_cap() -> u64 {
-    300
-}
-fn default_base_udp_port() -> u16 {
-    25565
-}
-fn default_headless_image() -> String {
-    "localhost/fika-headless:latest".to_string()
-}
-fn default_isolated_paths() -> Vec<String> {
-    vec!["BepInEx/config".to_string()]
-}
-fn default_ntsync() -> bool {
-    true
-}
-fn default_save_log_on_exit() -> bool {
-    true
-}
-fn default_overwrite_fika() -> bool {
-    false
-}
-fn default_server_ready_timeout() -> u64 {
-    120
+fn default_fika_poll_secs() -> u64 {
+    15
 }
 
 fn default_container_stop_timeout() -> u64 {
@@ -651,212 +597,6 @@ pub fn slugify(name: &str) -> String {
     result.trim_end_matches('-').to_string()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub struct HeadlessClientDef {
-    #[serde(default)]
-    pub extra_isolated_paths: Vec<String>,
-    #[serde(default)]
-    pub numa_node: Option<u32>,
-    #[serde(default)]
-    pub cpuset_cpus: Option<String>,
-    #[serde(default)]
-    pub cpuset_mems: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum HeadlessRunner {
-    #[default]
-    Umu,
-    Wine,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum HeadlessDisplayServer {
-    #[default]
-    Gamescope,
-    Xvfb,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct HeadlessConfig {
-    #[serde(default)]
-    pub install_dir: PathBuf,
-    #[serde(default = "default_restart_policy")]
-    pub restart_policy: RestartPolicy,
-    #[serde(default = "default_max_restart_attempts")]
-    pub max_restart_attempts: u32,
-    #[serde(default = "default_restart_backoff_cap")]
-    pub restart_backoff_cap: u64,
-    #[serde(default = "default_base_udp_port")]
-    pub base_udp_port: u16,
-    #[serde(default = "default_headless_image")]
-    pub image: String,
-    #[serde(default = "default_isolated_paths")]
-    pub isolated_paths: Vec<String>,
-    #[serde(default)]
-    pub clients: Vec<HeadlessClientDef>,
-    #[serde(default)]
-    pub runner: HeadlessRunner,
-    #[serde(default = "default_ntsync")]
-    pub ntsync: bool,
-    #[serde(default)]
-    pub esync: bool,
-    #[serde(default)]
-    pub fsync: bool,
-    #[serde(default)]
-    pub display_server: HeadlessDisplayServer,
-    #[serde(default = "default_save_log_on_exit")]
-    pub save_log_on_exit: bool,
-    #[serde(default)]
-    pub enable_log_purge: bool,
-    #[serde(default = "default_overwrite_fika")]
-    pub overwrite_fika: bool,
-    #[serde(default)]
-    pub numa_auto: bool,
-    #[serde(default)]
-    pub numa_node: Option<u32>,
-    #[serde(default = "default_server_ready_timeout")]
-    pub server_ready_timeout: u64,
-    #[serde(default)]
-    pub use_upnp: bool,
-    #[serde(default)]
-    pub physical_cores_only: bool,
-}
-
-impl Default for HeadlessConfig {
-    fn default() -> Self {
-        Self {
-            install_dir: PathBuf::new(),
-            restart_policy: RestartPolicy::Auto,
-            max_restart_attempts: 5,
-            restart_backoff_cap: 300,
-            base_udp_port: 25565,
-            image: default_headless_image(),
-            isolated_paths: default_isolated_paths(),
-            clients: Vec::new(),
-            runner: HeadlessRunner::default(),
-            ntsync: default_ntsync(),
-            esync: false,
-            fsync: false,
-            display_server: HeadlessDisplayServer::default(),
-            save_log_on_exit: default_save_log_on_exit(),
-            enable_log_purge: false,
-            overwrite_fika: default_overwrite_fika(),
-            numa_auto: false,
-            numa_node: None,
-            server_ready_timeout: 120,
-            use_upnp: false,
-            physical_cores_only: false,
-        }
-    }
-}
-
-pub const MAX_HEADLESS_CLIENTS: u32 = 16;
-
-impl HeadlessConfig {
-    pub fn client_count(&self) -> u32 {
-        self.clients.len() as u32
-    }
-
-    pub fn effective_isolated_paths(&self, index: usize) -> Vec<String> {
-        let mut paths = self.isolated_paths.clone();
-        if let Some(client) = self.clients.get(index) {
-            paths.extend(client.extra_isolated_paths.clone());
-        }
-        paths
-    }
-
-    pub fn validate(&self, config: &Config, spt_dir: &Path) -> Result<()> {
-        if self.clients.is_empty() {
-            return Ok(());
-        }
-        if self.numa_auto && self.numa_node.is_some() {
-            bail!(
-                "headless.numa_auto and headless.numa_node are mutually exclusive — \
-                 use numa_auto for round-robin or numa_node for a fixed default, not both"
-            );
-        }
-
-        // Warn if configured NUMA nodes don't exist on this system
-        let topology = crate::numa::NumaTopology::detect().unwrap_or_else(|e| {
-            tracing::warn!("Failed to detect NUMA topology: {e}");
-            crate::numa::NumaTopology::empty()
-        });
-
-        if !topology.is_empty() {
-            if let Some(node) = self.numa_node {
-                if topology.cpuset_for_node(node).is_err() {
-                    tracing::warn!(
-                        "headless.numa_node = {node} does not match any detected NUMA node (available: {:?})",
-                        topology.node_ids()
-                    );
-                }
-            }
-            for (i, client) in self.clients.iter().enumerate() {
-                if let Some(node) = client.numa_node {
-                    if topology.cpuset_for_node(node).is_err() {
-                        tracing::warn!(
-                            "headless.clients[{i}].numa_node = {node} does not match any detected NUMA node (available: {:?})",
-                            topology.node_ids()
-                        );
-                    }
-                }
-            }
-        }
-
-        if !is_fika_installed(spt_dir) {
-            bail!(
-                "Fika server mod not found at {}. Dedicated client management requires Fika.",
-                spt_dir.join("SPT/user/mods/fika-server").display()
-            );
-        }
-        if self.install_dir.as_os_str().is_empty() || !self.install_dir.exists() {
-            bail!(
-                "headless.install_dir '{}' does not exist",
-                self.install_dir.display()
-            );
-        }
-        // ponytail: canonicalize to handle symlinks/.. — starts_with on raw paths is unreliable
-        if let (Ok(canon_install), Ok(canon_spt)) =
-            (self.install_dir.canonicalize(), spt_dir.canonicalize())
-        {
-            if canon_install.starts_with(&canon_spt) {
-                bail!(
-                    "headless.install_dir ('{}') must not be inside spt_dir ('{}') — \
-                     the SPT server container mounts spt_dir and its entrypoint chowns the \
-                     entire tree, which fails on wine-prefix dirs relabeled by headless \
-                     containers (SELinux MCS conflict). Move install_dir outside spt_dir.",
-                    self.install_dir.display(),
-                    spt_dir.display()
-                );
-            }
-        }
-        let count = self.client_count();
-        match (self.base_udp_port as u32).checked_add(count - 1) {
-            Some(max_port) if max_port > 65535 => {
-                bail!(
-                    "headless.base_udp_port ({}) + client count ({}) exceeds port range (max port would be {})",
-                    self.base_udp_port, count, max_port
-                );
-            }
-            None => {
-                bail!(
-                    "headless.base_udp_port ({}) + client count ({}) exceeds port range",
-                    self.base_udp_port,
-                    count
-                );
-            }
-            _ => {}
-        }
-        if config.server_container.is_none() {
-            bail!("server_container must be configured for headless client management");
-        }
-        Ok(())
-    }
-}
-
 pub fn is_fika_installed(spt_dir: &Path) -> bool {
     spt_dir.join("SPT/user/mods/fika-server").is_dir()
 }
@@ -1092,9 +832,16 @@ pub struct Config {
     #[serde(default = "default_forge_cache_ttl")]
     pub forge_cache_ttl: Option<u64>,
 
+    /// Name of the compose-managed Fika headless container. quma only ever
+    /// monitors it (status/logs) and start/stop/restarts it — it never creates
+    /// or scales headless clients; the compose stack owns that.
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub headless: Option<HeadlessConfig>,
+    pub headless_container: Option<String>,
+
+    /// How often the Fika poller samples player presence to derive raid start/end.
+    #[serde(default = "default_fika_poll_secs")]
+    pub fika_poll_secs: u64,
 
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1155,7 +902,8 @@ impl Default for Config {
             update_notify_interval: 1800,
             update_disabled_mods: false,
             forge_cache_ttl: Some(86400),
-            headless: None,
+            headless_container: None,
+            fika_poll_secs: default_fika_poll_secs(),
             modsync: None,
             logging: LoggingConfig::default(),
             backup: BackupConfig::default(),
@@ -1350,9 +1098,8 @@ impl Config {
                 self.logging.console.format = fmt;
             }
         }
-        env_override!(parse: self.headless.get_or_insert_with(HeadlessConfig::default).restart_policy, "QUMA_HEADLESS_RESTART_POLICY", RestartPolicy);
-        env_override!(path: self.headless.get_or_insert_with(HeadlessConfig::default).install_dir, "QUMA_HEADLESS_INSTALL_DIR");
-        env_override!(parse: self.headless.get_or_insert_with(HeadlessConfig::default).server_ready_timeout, "QUMA_HEADLESS_SERVER_READY_TIMEOUT", u64);
+        env_override!(opt_str: self.headless_container, "QUMA_HEADLESS_CONTAINER");
+        env_override!(parse: self.fika_poll_secs, "QUMA_FIKA_POLL_SECS", u64);
         env_override!(bool: self.tls_enabled, "QUMA_TLS_ENABLED");
         env_override!(opt_path: self.tls_cert, "QUMA_TLS_CERT");
         env_override!(opt_path: self.tls_key, "QUMA_TLS_KEY");
@@ -1718,219 +1465,6 @@ max_entries = 200000
     }
 
     #[test]
-    fn headless_config_full_deserialization() {
-        let toml_str = r#"
-[headless]
-install_dir = "/opt/fika-client"
-restart_policy = "auto"
-max_restart_attempts = 10
-restart_backoff_cap = 600
-base_udp_port = 25565
-image = "ghcr.io/zhliau/fika-headless-docker:v2.1.0"
-isolated_paths = ["BepInEx/config", "BepInEx/cache"]
-runner = "wine"
-ntsync = false
-esync = true
-fsync = false
-display_server = "xvfb"
-save_log_on_exit = false
-enable_log_purge = true
-overwrite_fika = false
-server_ready_timeout = 300
-physical_cores_only = true
-
-[[headless.clients]]
-
-[[headless.clients]]
-extra_isolated_paths = ["BepInEx/plugins/testing"]
-"#;
-        let config: Config = toml::from_str(toml_str).expect("should parse");
-        let headless = config.headless.unwrap();
-        assert_eq!(headless.install_dir, PathBuf::from("/opt/fika-client"));
-        assert_eq!(headless.restart_policy, RestartPolicy::Auto);
-        assert_eq!(headless.max_restart_attempts, 10);
-        assert_eq!(headless.restart_backoff_cap, 600);
-        assert_eq!(headless.base_udp_port, 25565);
-        assert_eq!(headless.image, "ghcr.io/zhliau/fika-headless-docker:v2.1.0");
-        assert_eq!(
-            headless.isolated_paths,
-            vec!["BepInEx/config", "BepInEx/cache"]
-        );
-        assert_eq!(headless.clients.len(), 2);
-        assert!(headless.clients[0].extra_isolated_paths.is_empty());
-        assert_eq!(
-            headless.clients[1].extra_isolated_paths,
-            vec!["BepInEx/plugins/testing"]
-        );
-        assert_eq!(headless.runner, HeadlessRunner::Wine);
-        assert!(!headless.ntsync);
-        assert!(headless.esync);
-        assert!(!headless.fsync);
-        assert_eq!(headless.display_server, HeadlessDisplayServer::Xvfb);
-        assert!(!headless.save_log_on_exit);
-        assert!(headless.enable_log_purge);
-        assert!(!headless.overwrite_fika);
-        assert!(headless.physical_cores_only);
-        assert_eq!(headless.server_ready_timeout, 300);
-    }
-
-    #[test]
-    fn headless_config_minimal_with_defaults() {
-        let toml_str = r#"
-[headless]
-install_dir = "/opt/fika"
-
-[[headless.clients]]
-"#;
-        let config: Config = toml::from_str(toml_str).expect("should parse");
-        let headless = config.headless.unwrap();
-        assert_eq!(headless.client_count(), 1);
-        assert_eq!(headless.restart_policy, RestartPolicy::Auto);
-        assert_eq!(headless.max_restart_attempts, 5);
-        assert_eq!(headless.restart_backoff_cap, 300);
-        assert_eq!(headless.base_udp_port, 25565);
-        assert_eq!(headless.image, "localhost/fika-headless:latest");
-        assert_eq!(headless.isolated_paths, vec!["BepInEx/config".to_string()]);
-        assert_eq!(headless.server_ready_timeout, 120);
-    }
-
-    #[test]
-    fn headless_config_no_clients_defined() {
-        let toml_str = r#"
-[headless]
-install_dir = "/opt/fika"
-"#;
-        let config: Config = toml::from_str(toml_str).expect("should parse");
-        let headless = config.headless.unwrap();
-        assert_eq!(headless.client_count(), 0);
-        assert!(headless.clients.is_empty());
-    }
-
-    #[test]
-    fn headless_config_new_field_defaults() {
-        let config: HeadlessConfig = HeadlessConfig::default();
-        assert_eq!(config.runner, HeadlessRunner::Umu);
-        assert!(config.ntsync);
-        assert!(!config.esync);
-        assert!(!config.fsync);
-        assert_eq!(config.display_server, HeadlessDisplayServer::Gamescope);
-        assert!(config.save_log_on_exit);
-        assert!(!config.enable_log_purge);
-        assert!(!config.overwrite_fika);
-        assert!(!config.physical_cores_only);
-        assert_eq!(config.server_ready_timeout, 120);
-    }
-
-    #[test]
-    fn headless_effective_isolated_paths_merges() {
-        let headless = HeadlessConfig {
-            isolated_paths: vec!["BepInEx/config".to_string()],
-            clients: vec![
-                HeadlessClientDef {
-                    extra_isolated_paths: vec![],
-                    ..Default::default()
-                },
-                HeadlessClientDef {
-                    extra_isolated_paths: vec!["BepInEx/cache".to_string()],
-                    ..Default::default()
-                },
-            ],
-            ..HeadlessConfig::default()
-        };
-        assert_eq!(
-            headless.effective_isolated_paths(0),
-            vec!["BepInEx/config".to_string()]
-        );
-        assert_eq!(
-            headless.effective_isolated_paths(1),
-            vec!["BepInEx/config".to_string(), "BepInEx/cache".to_string()]
-        );
-    }
-
-    #[test]
-    fn headless_config_validation_port_overflow() {
-        let tmp = tempfile::tempdir().unwrap();
-        let spt_dir = tmp.path();
-        std::fs::create_dir_all(spt_dir.join("SPT/user/mods/fika-server")).unwrap();
-        let install_tmp = tempfile::tempdir().unwrap();
-        let install_dir = install_tmp.path().to_path_buf();
-        let headless = HeadlessConfig {
-            install_dir,
-            base_udp_port: 65534,
-            clients: vec![
-                HeadlessClientDef::default(),
-                HeadlessClientDef::default(),
-                HeadlessClientDef::default(),
-            ],
-            ..HeadlessConfig::default()
-        };
-        let config = Config {
-            server_container: Some("spt".to_string()),
-            ..Config::default()
-        };
-        let result = headless.validate(&config, spt_dir);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("port"));
-    }
-
-    #[test]
-    fn headless_config_validation_no_fika() {
-        let headless = HeadlessConfig {
-            install_dir: PathBuf::from("/tmp"),
-            clients: vec![HeadlessClientDef::default()],
-            ..HeadlessConfig::default()
-        };
-        let config = Config {
-            server_container: Some("spt".to_string()),
-            ..Config::default()
-        };
-        let tmp = tempfile::tempdir().unwrap();
-        let result = headless.validate(&config, tmp.path());
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Fika"));
-    }
-
-    #[test]
-    fn headless_config_validation_install_dir_inside_spt_dir() {
-        let tmp = tempfile::tempdir().unwrap();
-        let spt_dir = tmp.path();
-        std::fs::create_dir_all(spt_dir.join("SPT/user/mods/fika-server")).unwrap();
-        let install_dir = spt_dir.join("headless");
-        std::fs::create_dir_all(&install_dir).unwrap();
-        let headless = HeadlessConfig {
-            install_dir,
-            clients: vec![HeadlessClientDef::default()],
-            ..HeadlessConfig::default()
-        };
-        let config = Config {
-            server_container: Some("spt".to_string()),
-            ..Config::default()
-        };
-        let result = headless.validate(&config, spt_dir);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("must not be inside"));
-    }
-
-    #[test]
-    fn headless_config_defaults() {
-        let config: Config = toml::from_str("").expect("empty config");
-        assert!(config.headless.is_none());
-    }
-
-    #[test]
-    fn headless_config_skip_serializing_when_none() {
-        let config = Config::default();
-        let serialized = toml::to_string_pretty(&config).unwrap();
-        assert!(
-            !serialized.contains("[headless]"),
-            "None headless should not be serialized"
-        );
-    }
-
-    #[test]
     fn fika_detection() {
         let tmp = tempfile::tempdir().unwrap();
         assert!(!is_fika_installed(tmp.path()));
@@ -2119,18 +1653,6 @@ enabled = false
         std::fs::create_dir_all(&narconet_dir).unwrap();
         std::fs::write(narconet_dir.join("package.json"), "{}").unwrap();
         assert!(is_modsync_installed(tmp.path()));
-    }
-
-    #[test]
-    fn restart_policy_serde() {
-        assert_eq!(
-            serde_json::from_str::<RestartPolicy>(r#""auto""#).unwrap(),
-            RestartPolicy::Auto
-        );
-        assert_eq!(
-            serde_json::from_str::<RestartPolicy>(r#""manual""#).unwrap(),
-            RestartPolicy::Manual
-        );
     }
 
     #[test]
@@ -2744,130 +2266,4 @@ include_patterns = ["user/mods/special/**"]
         assert_eq!(config.setup_zip, reloaded.setup_zip);
     }
 
-    #[test]
-    fn headless_numa_node_parses() {
-        let toml_str = r#"
-[headless]
-install_dir = "/opt/client"
-numa_node = 2
-
-[[headless.clients]]
-extra_isolated_paths = []
-
-[[headless.clients]]
-numa_node = 3
-"#;
-        let config: Config = toml::from_str(toml_str).unwrap();
-        let h = config.headless.unwrap();
-        assert_eq!(h.numa_node, Some(2));
-        assert!(!h.numa_auto);
-        assert_eq!(h.clients[0].numa_node, None);
-        assert_eq!(h.clients[1].numa_node, Some(3));
-    }
-
-    #[test]
-    fn headless_numa_auto_parses() {
-        let toml_str = r#"
-[headless]
-install_dir = "/opt/client"
-numa_auto = true
-
-[[headless.clients]]
-"#;
-        let config: Config = toml::from_str(toml_str).unwrap();
-        let h = config.headless.unwrap();
-        assert!(h.numa_auto);
-        assert_eq!(h.numa_node, None);
-    }
-
-    #[test]
-    fn headless_client_cpuset_override_parses() {
-        let toml_str = r#"
-[headless]
-install_dir = "/opt/client"
-
-[[headless.clients]]
-cpuset_cpus = "0-7,16-23"
-cpuset_mems = "0"
-"#;
-        let config: Config = toml::from_str(toml_str).unwrap();
-        let h = config.headless.unwrap();
-        assert_eq!(h.clients[0].cpuset_cpus, Some("0-7,16-23".to_string()));
-        assert_eq!(h.clients[0].cpuset_mems, Some("0".to_string()));
-    }
-
-    #[test]
-    fn headless_numa_auto_and_node_rejects() {
-        let toml_str = r#"
-[headless]
-install_dir = "/tmp/test-client"
-numa_auto = true
-numa_node = 1
-
-[[headless.clients]]
-"#;
-        let config: Config = toml::from_str(toml_str).unwrap();
-        let h = config.headless.unwrap();
-        let full_config = Config {
-            headless: Some(h.clone()),
-            server_container: Some("spt".to_string()),
-            ..Default::default()
-        };
-        // Create a temp dir for install_dir so other validations pass
-        let tmp = tempfile::tempdir().unwrap();
-        let install_dir = tmp.path().join("client");
-        std::fs::create_dir_all(&install_dir).unwrap();
-        // Create fika-server dir
-        let spt_dir = tmp.path().join("spt");
-        std::fs::create_dir_all(spt_dir.join("SPT/user/mods/fika-server")).unwrap();
-
-        let mut h_mut = h;
-        h_mut.install_dir = install_dir;
-        let result = h_mut.validate(&full_config, &spt_dir);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("numa_auto"));
-    }
-
-    #[test]
-    fn headless_config_without_numa_parses_unchanged() {
-        let toml_str = r#"
-[headless]
-install_dir = "/opt/client"
-
-[[headless.clients]]
-extra_isolated_paths = ["BepInEx/plugins"]
-"#;
-        let config: Config = toml::from_str(toml_str).unwrap();
-        let h = config.headless.unwrap();
-        assert_eq!(h.numa_node, None);
-        assert!(!h.numa_auto);
-        assert_eq!(h.clients[0].numa_node, None);
-        assert_eq!(h.clients[0].cpuset_cpus, None);
-        assert_eq!(h.clients[0].cpuset_mems, None);
-    }
-
-    #[test]
-    fn headless_validate_warns_on_unknown_numa_node() {
-        // This test verifies the validation doesn't error on unknown nodes
-        // (it warns, but we can't easily capture tracing warns in a unit test).
-        // Instead, verify validate() succeeds when a valid numa_node is set.
-        let tmp = tempfile::tempdir().unwrap();
-        let spt_dir = tmp.path().join("spt");
-        std::fs::create_dir_all(spt_dir.join("SPT/user/mods/fika-server")).unwrap();
-        let install_dir = tmp.path().join("client");
-        std::fs::create_dir_all(&install_dir).unwrap();
-
-        let h = HeadlessConfig {
-            install_dir,
-            clients: vec![HeadlessClientDef::default()],
-            numa_node: Some(99), // nonexistent node — should warn, not error
-            ..Default::default()
-        };
-        let config = Config {
-            server_container: Some("spt".to_string()),
-            ..Default::default()
-        };
-        // validate() should succeed (warn, not bail)
-        assert!(h.validate(&config, &spt_dir).is_ok());
-    }
 }

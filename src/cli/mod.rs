@@ -7,7 +7,6 @@ pub mod backup;
 pub mod check;
 pub mod common;
 pub mod generate;
-pub mod headless;
 pub mod install;
 pub mod invite;
 pub mod list;
@@ -135,12 +134,6 @@ pub enum Command {
     Server {
         #[command(subcommand)]
         action: ServerAction,
-    },
-
-    /// Manage Fika headless clients
-    Headless {
-        #[command(subcommand)]
-        action: headless::HeadlessAction,
     },
 
     /// Start the Quartermaster web UI

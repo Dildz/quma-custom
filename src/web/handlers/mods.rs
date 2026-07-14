@@ -514,7 +514,7 @@ pub async fn list_mods(
     // ponytail: build set of mod IDs with client files
     let client_file_mods: std::collections::HashSet<i64> = all_files
         .into_iter()
-        .filter(|f| crate::headless_sync::is_client_file(&f.file_path))
+        .filter(|f| crate::client_files::is_client_file(&f.file_path))
         .filter_map(|f| f.mod_id)
         .collect();
 
@@ -2205,7 +2205,7 @@ pub async fn list_body_partial(
 
     let client_file_mods: std::collections::HashSet<i64> = all_files
         .into_iter()
-        .filter(|f| crate::headless_sync::is_client_file(&f.file_path))
+        .filter(|f| crate::client_files::is_client_file(&f.file_path))
         .filter_map(|f| f.mod_id)
         .collect();
 

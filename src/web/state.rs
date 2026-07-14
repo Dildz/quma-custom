@@ -37,8 +37,6 @@ pub struct AppState {
     pub log_broadcast: Arc<LogBroadcast>,
     pub reload_handles: Arc<ReloadHandles>,
     pub container_mgr: Option<Arc<ContainerManager>>,
-    pub client_states: Option<Arc<tokio::sync::RwLock<Vec<crate::client::ClientState>>>>,
-    pub converging: Arc<AtomicBool>,
     pub fika_installed: bool,
     pub modsync_installed: AtomicBool,
     pub svm: Option<Arc<parking_lot::RwLock<SvmManager>>>,
@@ -66,12 +64,6 @@ impl AppState {
     /// Clone the full config (useful for passing into background tasks or sync closures).
     pub fn config_cloned(&self) -> Config {
         self.config.read().clone()
-    }
-
-    /// Get a handle to the config RwLock for passing into background tasks
-    /// that need to update config after disk writes.
-    pub fn config_handle(&self) -> Arc<parking_lot::RwLock<Config>> {
-        Arc::clone(&self.config)
     }
 
     /// Reload config from disk into the in-memory RwLock.

@@ -10,7 +10,7 @@ use bollard::models::{
 use bollard::query_parameters::{
     CreateContainerOptionsBuilder, CreateImageOptionsBuilder, ListContainersOptionsBuilder,
     LogsOptionsBuilder, RemoveContainerOptionsBuilder, StartContainerOptions,
-    StopContainerOptionsBuilder, WaitContainerOptions,
+    StopContainerOptionsBuilder,
 };
 use bollard::Docker;
 use futures_util::Stream;
@@ -36,6 +36,7 @@ pub struct ContainerManager {
 #[derive(Debug, Clone)]
 pub enum SelinuxLabel {
     Private,
+    #[allow(dead_code)] // completes the SELinux mount-label set; only tests construct it now
     Shared,
     #[allow(dead_code)]
     None,
@@ -85,6 +86,7 @@ impl VolumeMount {
 #[derive(Debug, Clone)]
 pub enum Protocol {
     Tcp,
+    #[allow(dead_code)] // completes the port-protocol set; only tests construct it now
     Udp,
 }
 
@@ -159,10 +161,6 @@ impl ContainerManager {
             docker: Arc::new(docker),
             stop_timeout: stop_timeout as i32,
         })
-    }
-
-    pub fn docker(&self) -> &Docker {
-        &self.docker
     }
 
     pub async fn start(&self, container: &str) -> Result<()> {
@@ -252,19 +250,6 @@ impl ContainerManager {
                     .build(),
             ),
         )
-    }
-
-    /// Watch a container for exit. Returns a stream that yields a single
-    /// `ContainerWaitResponse` when the container stops (exit code 0) or an
-    /// `Error::DockerContainerWaitError` for non-zero exits (bollard converts
-    /// non-zero codes into errors). Callers should match both variants.
-    pub fn wait_container(
-        &self,
-        container: &str,
-    ) -> impl Stream<Item = Result<bollard::models::ContainerWaitResponse, bollard::errors::Error>>
-    {
-        self.docker
-            .wait_container(container, None::<WaitContainerOptions>)
     }
 
     pub async fn pull_image(&self, image: &str) -> Result<()> {
