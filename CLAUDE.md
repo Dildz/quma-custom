@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Quartermaster (`quma`) is a Rust CLI + web UI tool for managing server-side mods on an SPT/Fika dedicated server. It installs, updates, and removes mods from [SPT Forge](https://forge.sp-tarkov.com), with a web dashboard for server hosts and connected players. Linux-only for v1; the SPT server runs in a container.
 
-> **Detached local fork.** This is a private, upstream-detached copy adapted for a Docker + compose stack running the `ghcr.io/dildz/spt-fika-server` image with Dildz/Corter ModSync (not NarcoNet). The container layer talks to the Docker Engine API via bollard and uses the Docker socket first, so "Podman" below reads as "Docker" here. See `LOCAL-SETUP.md` for how to run it against this box's stack without touching the live server.
+> **Detached local fork.** This is a private, upstream-detached copy adapted for a Docker + compose stack running the `ghcr.io/dildz/spt-fika-server` image with Dildz/Corter ModSync (not NarcoNet). The container layer talks to the Docker Engine API via bollard and uses the Docker socket first, so "Podman" below reads as "Docker" here. See `LOCAL-SETUP.md` for how to run it against this box's stack without touching the live server. See **Upstream Divergence** below before pulling anything from upstream.
 
 **Binary name**: `quma`
 
@@ -156,6 +156,105 @@ Do not pause for confirmation on any of these during SDD execution. The review c
 - `include=versions` on list endpoint returns abbreviated versions (last 6, no `link`/`content_length`/`fika_compatibility`).
 - `include=versions` on single-mod endpoint returns full versions (last 10, all fields).
 - Dedicated versions endpoint (`GET /mod/{id}/versions`) supports filtering and pagination.
+
+## Upstream Divergence
+
+**Audit date: 2026-08-27.** Merge base `5f1a1f1` (2026-07-07). Upstream `cebarks/quartermaster@main`
+tip at audit: `672224c` (2026-07-31). Gap: **21 ours ahead / 164 upstream behind**, 181 files.
+
+### Do not merge upstream main
+
+Upstream landed `refactor: remove NarcoNet/modsync code, convoy is the sole sync system`.
+`src/web/handlers/modsync.rs` and `templates/modsync/` **no longer exist upstream** — they were
+replaced by a new in-house delivery system (`src/convoy/`, +1257 lines, catalog + groups DB +
+web UI + bundle predownload).
+
+This fork uses Dildz/Corter ModSync and is not adopting Convoy. A merge or rebase onto upstream
+main would delete the ModSync integration this fork depends on. **Cherry-pick only.**
+
+Same story for the other two big upstream tracks, both aimed at subsystems this fork deliberately
+removed (see "Headless clients — monitor only"):
+- **Overlayfs mod isolation** — bind mounts replaced by Podman/fuse-overlayfs, all mod file ops
+  redirected through an overlay dir. This fork is Docker + bollard and keeps direct mounts.
+- **Headless rework** — service layer + JSON API, CLI as HTTP client, per-client images,
+  purpose-built containers. This fork does not own headless clients.
+
+### The `QumaDirs` ceiling
+
+Upstream `a28645e` (`replace spt_dir with QumaDirs struct`) touches **56 files** and is the pivot
+into the overlay layout. Every later upstream commit that touches paths assumes `QumaDirs`.
+
+Treat it as a hard boundary: cherry-pick freely from the path-agnostic areas (Forge client,
+dependency tree, invites, templates, migrations). Anything path-related above that line means
+either porting `QumaDirs` — a large refactor that exists to serve overlayfs, which this fork does
+not want — or hand-editing. Prefer hand-porting the specific hunk.
+
+### Migration numbering — fix this first
+
+Our `migrations/015_update_notifications.sql` was upstreamed and **renumbered to `021`**.
+Upstream now has 018–022 where we have nothing, and upstream's 021 duplicates our 015.
+
+Cherry-picking upstream migrations without renumbering gives the sequence 015, 018, 019, 020, 022
+— with our 015 running *before* 018, where upstream runs the same SQL *after*. Renumber our
+`015_update_notifications.sql` → `021_update_notifications.sql` as a deliberate first step,
+before picking anything else. Note upstream itself has a duplicate `021_` prefix
+(`021_mod_guid.sql` + `021_update_notifications.sql`).
+
+### Already contributed upstream — do not re-pick
+
+These are ours and already merged into upstream; `src/github.rs`, `src/notify.rs` and
+`src/cli/reindex.rs` exist on both sides:
+- `feat: add quma reindex to rebuild file tracking from Forge archives`
+- `feat(web): add check-for-updates button to mods page` (#312)
+- `feat: GitHub release updates and Discord mod-update notifications`
+- `fix(web): gate privileged mod endpoints behind RBAC permission checks` (#307)
+- `fix(forge): align Forge API client with current docs`
+
+### Tier 1 — clean, isolated, take these
+
+| Commit | What | Scope |
+| --- | --- | --- |
+| `97f5ef7` | ammonia XSS fix, RUSTSEC-2026-0213 | `Cargo.lock` only |
+| `679baba` | Forge client-level rate limiter (prevents 429s) | 3 files, new `forge/rate_limit.rs` |
+| `22008de` | Clamp retry-after floor to 1s, `MAX_RETRIES` → 3 | `forge/client.rs` |
+| `5abb84e` | Remove hardcoded 500 MB download size limit | `forge/client.rs` |
+| `b782861` | `/quma/files` renders blank — HTMX target inheritance | `templates/files.html` |
+| `f904565` | Dependency tree schema migration (`018`) | `migrations/`, `dev/seed.sql` |
+| `4e1a3f6` | `quma list --tree` | `cli/list.rs`, `cli/mod.rs`, `main.rs` |
+| `2fd26d2` | `quma reindex --deps` dependency backfill | 4 files, builds on our `reindex.rs` |
+| `7a44b4b` | Prevent duplicate pending mod-queue operations | migration `019` + 2 files |
+
+The Forge cluster is the highest value — our `forge/client.rs` is already close to upstream's
+(we upstreamed the API-docs alignment), so these should apply near-clean, and 429 handling
+matters on bulk update runs.
+
+`b782861` overlaps our own `9168555` ("stop the integrity poll from blanking the File Tracking
+page") — diff both before taking; may be the same bug found twice or complementary.
+
+### Tier 2 — real value, real work
+
+- **`5479fb3`** ban IPs with excessive unhandled requests — new `src/web/scanner_guard.rs`, plus
+  `config.rs` (we cut 670 lines) and `web/mod.rs`. Worth it if the box is internet-facing.
+- **`e355b7a`** use real client IP behind reverse proxy — **directly relevant**: running behind a
+  reverse proxy in Docker, logged and banned IPs are currently the proxy's. Touches `web/proxy.rs`
+  (deleted here) and `handlers/convoy.rs` (absent). Hand-port the `scanner_guard.rs` portion only.
+- **`672224c`** SHA-256 → xxHash3-64 file hashing — 4 files, tidy, real speedup on large mod dirs.
+  Touches `spt/mods.rs`, near our file-tracking work. Ships migration `022` to clear old hashes.
+- **`63f5db2`** multi-use invites — 12 files but all inside the user/invite subsystem we left
+  untouched; should apply near-clean.
+- **Requests page kanban → compact tabbed table** — several commits, self-contained in
+  `templates/requests` + handlers. Adds a `time_ago` Askama filter and an HTMX tab-body endpoint.
+- **RBAC hardening** (`harden RBAC — profile access control, group permissions, role sync`,
+  `harden RBAC access controls`) — extends our own endpoint gating.
+- **`fix: fail signup atomically when SPT profile creation returns empty AID`** — real bug.
+- **`fix(raids): use correct profile key for scav character snapshots`** — will not apply (we
+  rewrote `web/raid_tracker.rs`), but read the diff; the bug may exist here too.
+
+### Skip
+
+All Convoy (~25 commits), all headless (~20), all overlayfs (~10), NUMA, the purpose-built
+container images, and CI fixes for the release/publish-crate workflows this fork deleted.
+`0d8e9c2` (bollard CPU stats) touches `src/client/supervisor.rs`, which no longer exists here.
 
 ## AI Disclosure
 
